@@ -1,7 +1,0 @@
-findings:
-  - spec: auth
-    finding: Mismatch between spec and code
-    code: /auth/login returns wrong status
-    specText: Spec says 200
-    options: A or B
-    recommendation: Option A
