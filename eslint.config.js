@@ -1,0 +1,76 @@
+import js from "@eslint/js";
+import importPlugin from "eslint-plugin-import";
+import tseslint from "typescript-eslint";
+
+// eslint-disable-next-line @typescript-eslint/no-deprecated
+export default tseslint.config(
+  js.configs.recommended,
+  ...tseslint.configs.strictTypeChecked,
+  ...tseslint.configs.stylisticTypeChecked,
+  {
+    plugins: {
+      import: importPlugin,
+    },
+    languageOptions: {
+      parserOptions: {
+        projectService: {
+          allowDefaultProject: ["*.config.ts", "*.config.js"],
+        },
+      },
+    },
+  },
+  // Extension files use external types from pi-coding-agent
+  {
+    files: ["extensions/**/*"],
+    ...tseslint.configs.disableTypeChecked,
+  },
+  {
+    rules: {
+      "@typescript-eslint/no-explicit-any": "warn",
+      "@typescript-eslint/no-unused-vars": [
+        "error",
+        { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
+      ],
+      "@typescript-eslint/require-await": "off",
+
+      // General
+      eqeqeq: ["error", "always"],
+      "no-var": "error",
+      "prefer-const": "error",
+      "no-empty": "error",
+      "no-unused-expressions": "error",
+      "no-throw-literal": "error",
+      "prefer-template": "error",
+      "object-shorthand": "error",
+      "quote-props": ["error", "as-needed"],
+
+      // Spacing
+      "array-bracket-spacing": ["error", "never"],
+      "object-curly-spacing": ["error", "always"],
+      "comma-spacing": ["error", { before: false, after: true }],
+      "space-infix-ops": "error",
+      "keyword-spacing": ["error", { before: true, after: true }],
+      "space-before-blocks": "error",
+
+      // Imports
+      "import/order": [
+        "error",
+        {
+          groups: [
+            "builtin",
+            "external",
+            "internal",
+            "parent",
+            "sibling",
+            "index",
+          ],
+          alphabetize: { order: "asc" },
+          "newlines-between": "always",
+        },
+      ],
+    },
+  },
+  {
+    ignores: ["**/dist/**", "**/node_modules/**"],
+  },
+);

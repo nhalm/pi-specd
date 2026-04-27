@@ -1,0 +1,25 @@
+{
+  "name": "github.com/nhalm/pi-extensions",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Justify portal prompts and extensions",
+  "keywords": [
+    "pi-package"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ]
+  },
+  "devDependencies": {
+    "@commitlint/config-conventional": "^19.0.0",
+    "@eslint/js": "^9.0.0",
+    "commitlint": "^19.0.0",
+    "eslint": "^9.0.0",
+    "eslint-plugin-import": "^2.0.0",
+    "lefthook": "^1.0.0",
+    "prettier": "^3.0.0",
+    "typescript": "^5.0.0",
+    "typescript-eslint": "^8.0.0"
+  }
+}
