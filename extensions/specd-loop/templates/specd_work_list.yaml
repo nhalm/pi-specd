@@ -1,0 +1,17 @@
+# Work List
+#
+# Single execution queue for all work — spec implementations, audit findings,
+# and promoted review items.
+#
+# HOW IT WORKS:
+# 1. Pick an unblocked item (completed: false, no blocked field)
+# 2. Implement it
+# 3. Mark item as completed: true
+# 4. Remove blocked field from items that depended on what you completed
+# 5. LOOP_COMPLETE when no unblocked items remain
+#
+# AUDIT SCOPE:
+# Specs that appear in this file will be audited.
+# Use --full-audit to audit all specs in specs/.
+
+specs: []

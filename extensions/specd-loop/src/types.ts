@@ -7,7 +7,6 @@ export interface WorkItem {
 
 export interface Spec {
   name: string;
-  status: "draft" | "ready" | "implemented" | "deprecated";
   items: WorkItem[];
 }
 

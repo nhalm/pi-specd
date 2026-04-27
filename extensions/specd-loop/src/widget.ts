@@ -17,9 +17,9 @@ export function showWidget(
   const lines = [
     ` specd-loop | ${phase} | Cycle ${cycle}/${maxCycles} | ${itemsRemaining} items | ${status}`,
   ];
-  ctx.ui.setWidget("specd-loop", lines);
+  ctx.ui.setWidget('specd-loop', lines);
 }
 
 export function clearWidget(ctx: WidgetContext) {
-  ctx.ui.setWidget("specd-loop", undefined);
+  ctx.ui.setWidget('specd-loop', undefined);
 }

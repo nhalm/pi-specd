@@ -1,36 +1,33 @@
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from '@mariozechner/pi-coding-agent';
 
-import { logOutput } from "./logger.js";
-import { runPiPrompt } from "./pi-runner.js";
+import { logOutput } from './logger.js';
+import { runPiPrompt } from './pi-runner.js';
 import {
   IMPLEMENT_PROMPT,
   REVIEW_INTAKE_PROMPT,
   AUDIT_PROMPT,
   FULL_AUDIT_PROMPT,
-} from "./prompts.js";
-import { loadReviewList, getUndecided } from "./review.js";
-import { sendProgress, surfaceReviewItems } from "./ui.js";
-import { showWidget, clearWidget } from "./widget.js";
-import { loadWorkList, getUnblockedItems } from "./worklist.js";
+} from './prompts.js';
+import { loadReviewList, getUndecided } from './review.js';
+import { sendProgress, surfaceReviewItems } from './ui.js';
+import { showWidget, clearWidget } from './widget.js';
+import { loadWorkList, getUnblockedItems } from './worklist.js';
 
 const DEFAULT_MAX_CYCLES = 5;
 
 interface LoopOptions {
-  auditMode: "ready" | "full" | "skip";
+  auditMode: 'ready' | 'full' | 'skip';
   maxCycles: number;
 }
 
 function parseArgs(args: string): LoopOptions {
-  const options: LoopOptions = {
-    auditMode: "ready",
-    maxCycles: DEFAULT_MAX_CYCLES,
-  };
+  const options: LoopOptions = { auditMode: 'ready', maxCycles: DEFAULT_MAX_CYCLES };
 
   for (const part of args.trim().split(/\s+/)) {
-    if (part === "--full-audit") options.auditMode = "full";
-    else if (part === "--skip-audit") options.auditMode = "skip";
-    else if (part.startsWith("--max-cycles=")) {
-      const val = parseInt(part.split("=")[1], 10);
+    if (part === '--full-audit') options.auditMode = 'full';
+    else if (part === '--skip-audit') options.auditMode = 'skip';
+    else if (part.startsWith('--max-cycles=')) {
+      const val = parseInt(part.split('=')[1], 10);
       if (!isNaN(val) && val > 0) options.maxCycles = val;
     }
   }
@@ -40,53 +37,42 @@ function parseArgs(args: string): LoopOptions {
 
 export async function runLoop(
   pi: ExtensionAPI,
-  ctx: {
-    cwd: string;
-    ui: { setWidget(name: string, lines: string[] | undefined): void };
-  },
+  ctx: { cwd: string; ui: { setWidget(name: string, lines: string[] | undefined): void } },
   args: string,
 ): Promise<void> {
   const cwd = ctx.cwd;
   const options = parseArgs(args);
 
-  sendProgress(
-    pi,
-    "info",
-    `🚀 Starting specd loop (audit: ${options.auditMode})`,
-  );
+  sendProgress(pi, 'info', `🚀 Starting specd loop (audit: ${options.auditMode})`);
 
   // Step 1: Review intake
-  showWidget(ctx, "Review Intake", 0, options.maxCycles, 0, "Running...");
-  sendProgress(pi, "running", "📋 Running review intake...");
+  showWidget(ctx, 'Review Intake', 0, options.maxCycles, 0, 'Running...');
+  sendProgress(pi, 'running', '📋 Running review intake...');
   const reviewResult = await runPiPrompt(cwd, REVIEW_INTAKE_PROMPT);
 
   if (!reviewResult.success) {
     clearWidget(ctx);
-    sendProgress(pi, "error", `❌ Review intake failed`);
+    sendProgress(pi, 'error', `❌ Review intake failed`);
     return;
   }
 
-  const reviewLogPath = await logOutput("review-intake", reviewResult.output);
-  sendProgress(pi, "info", `📋 Review intake logged to: ${reviewLogPath}`);
+  const reviewLogPath = await logOutput('review-intake', reviewResult.output);
+  sendProgress(pi, 'info', `📋 Review intake logged to: ${reviewLogPath}`);
 
   // Check for undecided items AFTER review intake
   const reviewListAfterIntake = await loadReviewList(cwd);
   if (getUndecided(reviewListAfterIntake.findings).length > 0) {
-    await surfaceReviewItems(
-      pi,
-      cwd,
-      getUndecided(reviewListAfterIntake.findings),
-    );
+    await surfaceReviewItems(pi, cwd, getUndecided(reviewListAfterIntake.findings));
     clearWidget(ctx);
     sendProgress(
       pi,
-      "complete",
+      'complete',
       `⏸️ Answer the review items above, then run /specd:loop to continue.`,
     );
     return;
   }
 
-  sendProgress(pi, "info", "✅ Review intake complete");
+  sendProgress(pi, 'info', '✅ Review intake complete');
 
   // Step 2: Implement loop
   let cycle = 0;
@@ -99,37 +85,26 @@ export async function runLoop(
     const unblocked = getUnblockedItems(workList);
 
     if (unblocked.length === 0) {
-      sendProgress(pi, "info", "📋 No work items remaining");
+      sendProgress(pi, 'info', '📋 No work items remaining');
       break;
     }
 
-    showWidget(
-      ctx,
-      "Implement",
-      cycle,
-      options.maxCycles,
-      unblocked.length,
-      "Working...",
-    );
-    sendProgress(
-      pi,
-      "running",
-      `🔨 Cycle ${cycle}: ${unblocked.length} items to process`,
-    );
+    showWidget(ctx, 'Implement', cycle, options.maxCycles, unblocked.length, 'Working...');
+    sendProgress(pi, 'running', `🔨 Cycle ${cycle}: ${unblocked.length} items to process`);
 
-    const implResult = await runPiPrompt(cwd, IMPLEMENT_PROMPT, "sonnet");
+    const implResult = await runPiPrompt(cwd, IMPLEMENT_PROMPT, 'sonnet');
 
     if (!implResult.success) {
       clearWidget(ctx);
-      sendProgress(pi, "error", `❌ Implementation failed`);
+      sendProgress(pi, 'error', `❌ Implementation failed`);
       return;
     }
 
-    if (implResult.output.includes("LOOP_COMPLETE: true")) {
+    if (implResult.output.includes('LOOP_COMPLETE: true')) {
       const after = await loadWorkList(cwd);
       const processed = unblocked.length - getUnblockedItems(after).length;
       totalProcessed += processed;
-      sendProgress(pi, "info", `✅ Implementation done (${processed} items)`);
+      sendProgress(pi, 'info', `✅ Implementation done (${processed} items)`);
       break;
     }
 
@@ -148,25 +123,22 @@ export async function runLoop(
       clearWidget(ctx);
       sendProgress(
         pi,
-        "complete",
+        'complete',
         `⏸️ ${undecidedAfterImpl.length} review item(s) found. Answer them, then run /specd:loop to continue.`,
       );
       return;
     }
 
-    const cycleLogPath = await logOutput(
-      `implement-cycle-${cycle}`,
-      implResult.output,
-    );
-    showWidget(ctx, "Implement", cycle, options.maxCycles, remaining, "Done ✓");
+    const cycleLogPath = await logOutput(`implement-cycle-${cycle}`, implResult.output);
+    showWidget(ctx, 'Implement', cycle, options.maxCycles, remaining, 'Done ✓');
     sendProgress(
       pi,
-      "running",
+      'running',
       `  ✓ Processed ${processed}, ${remaining} remaining (logged: ${cycleLogPath})`,
     );
 
     if (remaining === 0) {
-      sendProgress(pi, "complete", "🎉 All work items complete!");
+      sendProgress(pi, 'complete', '🎉 All work items complete!');
       break;
     }
 
@@ -179,7 +151,7 @@ export async function runLoop(
       clearWidget(ctx);
       sendProgress(
         pi,
-        "error",
+        'error',
         `⚠️ Max cycles reached. ${getUnblockedItems(workList).length} items remain.`,
       );
       return;
@@ -187,33 +159,25 @@ export async function runLoop(
   }
 
   // Step 3: Audit
-  if (options.auditMode === "skip") {
-    showWidget(ctx, "Complete", cycle, options.maxCycles, 0, "Audit skipped");
-    sendProgress(
-      pi,
-      "complete",
-      `✅ Done! Processed ${totalProcessed} items (audit skipped)`,
-    );
+  if (options.auditMode === 'skip') {
+    showWidget(ctx, 'Complete', cycle, options.maxCycles, 0, 'Audit skipped');
+    sendProgress(pi, 'complete', `✅ Done! Processed ${totalProcessed} items (audit skipped)`);
     return;
   }
 
-  showWidget(ctx, "Audit", cycle, options.maxCycles, 0, "Running...");
-  sendProgress(pi, "running", `🔍 Running ${options.auditMode} audit...`);
-  const auditPrompt =
-    options.auditMode === "full" ? FULL_AUDIT_PROMPT : AUDIT_PROMPT;
-  const auditResult = await runPiPrompt(cwd, auditPrompt, "opus");
+  showWidget(ctx, 'Audit', cycle, options.maxCycles, 0, 'Running...');
+  sendProgress(pi, 'running', `🔍 Running ${options.auditMode} audit...`);
+  const auditPrompt = options.auditMode === 'full' ? FULL_AUDIT_PROMPT : AUDIT_PROMPT;
+  const auditResult = await runPiPrompt(cwd, auditPrompt, 'opus');
 
   if (!auditResult.success) {
     clearWidget(ctx);
-    sendProgress(pi, "error", `❌ Audit failed`);
+    sendProgress(pi, 'error', `❌ Audit failed`);
     return;
   }
 
-  const auditLogPath = await logOutput(
-    `${options.auditMode}-audit`,
-    auditResult.output,
-  );
-  sendProgress(pi, "running", `🔍 Audit logged to: ${auditLogPath}`);
+  const auditLogPath = await logOutput(`${options.auditMode}-audit`, auditResult.output);
+  sendProgress(pi, 'running', `🔍 Audit logged to: ${auditLogPath}`);
 
   // Surface review items if any were found
   const reviewList = await loadReviewList(cwd);
@@ -224,16 +188,12 @@ export async function runLoop(
     clearWidget(ctx);
     sendProgress(
       pi,
-      "complete",
+      'complete',
       `⏸️ Answer the review items above, then run /specd:loop to continue.`,
     );
     return;
   }
 
   clearWidget(ctx);
-  sendProgress(
-    pi,
-    "complete",
-    `✅ Loop complete! ${totalProcessed} items, audit clean`,
-  );
+  sendProgress(pi, 'complete', `✅ Loop complete! ${totalProcessed} items, audit clean`);
 }
