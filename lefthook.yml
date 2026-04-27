@@ -1,8 +1,12 @@
 pre-commit:
   parallel: true
   commands:
-    lint-and-fmt:
-      run: make lint fmt
+    eslint:
+      glob: '*.{ts,tsx}'
+      run: npx eslint {staged_files}
+    prettier:
+      glob: '*.{ts,tsx,json,md,yaml,yml}'
+      run: npx prettier --check {staged_files}
 
 commit-msg:
   commands:

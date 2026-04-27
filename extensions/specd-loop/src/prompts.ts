@@ -1,23 +1,79 @@
 // Internal prompts used by the loop - not auto-discovered
 
+export const PLAN_PROMPT = `---
+description: Collaborative planning to create specs and work items
+---
+
+## Your Role
+
+You are running the **planning** workflow. Your job is to create specs and write work items.
+
+**Do NOT run any implementation commands.** Implementation is a separate workflow triggered by the user. You only plan — you do not implement.
+
+## Instructions
+
+- Study AGENTS.md for guidelines
+- Study specs/README.md to understand existing specs
+- Only modify *.md files and specd_work_list.yaml
+- When doing research, use "model: Sonnet" agents in parallel
+
+## Workflow
+
+1. **Discuss** — Ask clarifying questions about what the user wants. Understand scope, edge cases, and design decisions before writing anything.
+2. **Write the spec** — Create or update the spec in specs/. Specs define WHAT, not HOW. Status: draft
+3. **Write work items as you go** — IMMEDIATELY write corresponding work items to specd_work_list.yaml. This is not optional. If you finish planning without writing work items, you have failed.
+4. **Update specs/README.md** — Add or update the spec entry in the index.
+5. **Done** — Tell the user to mark spec as ready when satisfied.
+
+When **updating** an existing spec, always review the work items in specd_work_list.yaml for that spec. Remove items that are no longer relevant, update items that changed, and unblock items whose dependencies were resolved.
+
+## Work Item Quality
+
+Work items are executed by an autonomous agent. Each item must be:
+
+- A single, concrete task
+- Has a clear "done" state that can be validated
+- Can be completed in one agent iteration
+
+**Bad:** "Implement auth system", "Add error handling"
+**Good:** "Create User model with fields X, Y, Z", "Add POST /auth/register endpoint"
+
+Use (blocked: ...) for items that depend on others.
+
+## Work Item Checkpoint
+
+**This is mandatory.** After writing or modifying a spec section, STOP before writing work items and perform this checkpoint:
+
+1. **List every distinct behavioral requirement** you just wrote in the spec.
+2. **Check for implied dependencies.** Each gap is a work item or a blocker.
+3. **Write one work item per requirement** — concrete, specific, with a clear done state.
+4. **Review existing work items** for this spec. Remove stale items, update changed items, unblock resolved items.
+
+## Spec-vs-Code Analysis
+
+When comparing specs against code, validate against actual code — never write findings directly from agent research.
+`;
+
 export const IMPLEMENT_PROMPT = `---
 description: Implement one work item from specd_work_list.yaml
 ---
 
 Study AGENTS.md for guidelines.
-Read specd_work_list.yaml in full — it contains all remaining work items.
+Read specd_work_list.yaml — it contains all remaining work items.
 
 Your task is to implement ONE work item, then validate it works.
 
 ## Step 0: Check for work
 
-Read specd_work_list.yaml. Check for unblocked items (items without \`blocked:\`). If none, output \`LOOP_COMPLETE: true\` and stop.
+Read specd_work_list.yaml. Find unblocked items (completed: false and no blocked field). If none exist, output \`LOOP_COMPLETE: true\` and stop.
 
 ## Step 1: Pick an unblocked item
 
+Each item has a \`spec\` field telling you which spec it belongs to. The spec name maps to specs/{name}.md.
+
 ## Step 2: Read the spec
 
-Read the relevant spec from specs/. Specs are the source of truth, not existing code. Only implement items for specs with status "ready".
+Read specs/{name}.md. Specs are the source of truth, not existing code.
 
 ## Step 3: Implement
 
@@ -29,8 +85,8 @@ Run tests, fix linting/formatting.
 
 ## Step 5: Record
 
-1. Mark item as completed in specd_work_list.yaml
-2. Unblock any items that were waiting for this one
+1. Set completed: true for the item in specd_work_list.yaml
+2. Remove blocked field from items that depended on what you completed
 3. If you encounter an ambiguous situation (unclear if code or spec is wrong), add it to specd_review.yaml
 4. Commit code changes
 
@@ -98,17 +154,16 @@ Output \`REVIEW_INTAKE_COMPLETE: true\` when done.
 `;
 
 export const AUDIT_PROMPT = `---
-description: Audit Ready specs against code and write findings
+description: Audit specs in the work list against code
 ---
 
 Study AGENTS.md for guidelines.
-Study specs/README.md to find all specs and their statuses.
 
-Your task is to audit Ready specs against code, then write findings.
+Your task is to audit specs against code, then write findings.
 
 ## Scope
 
-Only audit specs with status **Ready**. Skip Implemented, Draft, and Deprecated.
+Read specd_work_list.yaml. Look at the \`specs\` array. Each spec has a \`name\` field — audit each one. If \`specs\` is empty, output AUDIT_COMPLETE and stop.
 
 ## What counts as a finding
 
@@ -125,7 +180,7 @@ NOT a finding:
 
 ## Process
 
-For each Ready spec:
+For each spec in scope:
 
 ### Step 1: Gather
 
@@ -157,17 +212,16 @@ Output \`AUDIT_CLEAN: true\` if no new items added to specd_work_list.yaml.
 `;
 
 export const FULL_AUDIT_PROMPT = `---
-description: Audit all specs (Ready and Implemented) against code
+description: Audit all specs against code
 ---
 
 Study AGENTS.md for guidelines.
-Study specs/README.md to find all specs and their statuses.
 
-Your task is to audit ALL specs (Ready and Implemented) against code.
+Your task is to audit ALL specs against code.
 
 ## Scope
 
-Audit specs with status **Ready** or **Implemented**. Skip Draft and Deprecated.
+Read the specs/ directory. Audit every spec file in it (except this README).
 
 ## What counts as a finding
 
@@ -209,9 +263,7 @@ Write confirmed findings.
 
 ### Spec status transitions
 
-- Ready with NO findings → "Implemented"
-- Implemented with findings → bump version, set to "Ready"
-- Ready with findings → stays Ready
+The work list drives what's active. No status transitions needed — specs are edited in place.
 
 ## Output
 

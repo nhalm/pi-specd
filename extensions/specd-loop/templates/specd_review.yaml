@@ -1,0 +1,12 @@
+# Review Findings
+#
+# Ambiguous findings from audits that need human judgment.
+# Items sit here until you review them.
+#
+# How to answer - add a decision field:
+# - "Fix the code" — adds work item to fix code
+# - "Update the spec" — updates spec first, then adds work item
+# - "Ignore" — deletes finding, no action
+# - "Keep as is" — deletes finding, code is correct
+
+findings: []

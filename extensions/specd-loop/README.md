@@ -1,140 +1,95 @@
 # specd-loop
 
-Automates specd workflow iterations in pi. Each iteration runs in a fresh context to avoid context window bloat.
+Spec-driven development workflow for pi. You describe what to build, specs guide implementation, and agents work autonomously against the spec list.
 
-## How it works
+## Quick Start
 
-specd-loop runs three phases in sequence:
+```bash
+# For new projects:
+/specd:setup
+# ... answer the prompts ...
 
-1. **Review intake** - Reads your decisions from `specd_review.yaml`, updates specs and work list
-2. **Implement loop** - Runs implementation repeatedly until done (may create review items)
-3. **Audit** - Checks specs against code, writes findings (may create review items)
+# For existing nhalm/specd projects:
+/specd:migrate
+# ... confirm the migration ...
 
-## Files
+/specd:plan
+# ... describe what to build ...
 
-| File                   | Purpose                               | Committed?     |
-| ---------------------- | ------------------------------------- | -------------- |
-| `specs/*.md`           | Spec documents                        | Yes            |
-| `specd_work_list.yaml` | Work queue                            | No (ephemeral) |
-| `specd_review.yaml`    | Ambiguous findings and your decisions | No (ephemeral) |
+/specd:loop
+```
 
-The YAML files are managed by the extension. They are not tracked in git.
+## How It Works
 
-## Commands & Prompts
+1. **Setup/Migrate** — Initialize or migrate specd in your project.
+2. **Plan** (`/specd:plan`) — Create specs describing what to build. Work items are generated automatically.
+3. **Loop** (`/specd:loop`) — Agents implement work items, run audits, and surface decisions for you.
+4. **Review** — Fill in decisions for ambiguous findings, then run the loop again.
+
+## Commands
+
+### /specd:migrate
+
+Migrate an existing nhalm/specd project to specd-loop format. Removes:
+- Spec versions and changelogs
+- Spec status (Draft/Ready/Implemented)
+- Status column from specs/README.md
+
+### /specd:setup
+
+Initialize specd in a new project. Detects your project's build/test commands and conventions.
+
+Creates:
+- `AGENTS.md` — Agent guidelines
+- `PROJECT.md` — Your project settings
+- `specs/README.md` — Spec index and format guide
+- `specd_work_list.yaml` — Work queue
+- `specd_review.yaml` — Decision queue
+- `.pi-specd` — Version tracking
+- Updates `.gitignore`
 
 ### /specd:plan
 
-Interactive planning prompt. The agent helps you create specs and work items by asking questions and writing to specd_work_list.yaml.
+Create or update specs and work items.
 
 ### /specd:loop [options]
 
-Run the full automated loop. Options:
+Run the automated loop.
 
-| Option           | Description                                    |
-| ---------------- | ---------------------------------------------- |
-| `--full-audit`   | Audit all specs (Ready + Implemented)          |
-| `--skip-audit`   | Skip the audit phase                           |
+| Option | Description |
+|--------|-------------|
+| `--full-audit` | Audit all specs (not just those in work list) |
+| `--skip-audit` | Skip the audit phase |
 | `--max-cycles=N` | Override max implement iterations (default: 5) |
 
 ### /specd:status
 
 Show work list status: unblocked items, blocked items, pending reviews.
 
-## Typical workflow
+## Files
 
-```
-# 1. Plan (interactive)
-/specd:plan
-→ Discuss what to build with the agent
-→ Agent creates specs in specs/
-→ Agent writes work items to specd_work_list.yaml
-→ Tell agent: "mark all specs as ready"
+| File | Purpose | Committed? |
+|------|---------|-------------|
+| `AGENTS.md` | Agent instructions | Yes |
+| `PROJECT.md` | Build/test commands, conventions | Yes |
+| `specs/*.md` | Your specifications | Yes |
+| `specd_work_list.yaml` | Work queue | No |
+| `specd_review.yaml` | Pending decisions | No |
+| `.pi-specd` | Version info | No |
 
-# 2. Run the loop (automated)
-/specd:loop
-→ Review intake → Implement → Audit
+The work/review files and `.pi-specd` are gitignored.
 
-# 3. Handle review items if found (loop pauses)
-→ Review items are surfaced to you
-→ Edit specd_review.yaml with your decision
-→ Run /specd:loop again to continue
+## Review Items
 
-# 4. Check status anytime
-/specd:status
-```
+When the audit finds something ambiguous, it pauses and writes a finding to `specd_review.yaml`.
 
-## Review items
-
-When implementation or audit finds an ambiguous situation (unclear if code or spec is wrong), the loop pauses and surfaces the finding to you.
-
-### When this happens:
-
-- During implementation: the agent encounters something confusing
-- During audit: the agent finds a mismatch it can't resolve
-
-### How to answer:
-
-Edit `specd_review.yaml` and add your decision:
-
-```yaml
-## auth
-finding: The spec says X but the code does Y
-...
-decision: Fix the code to match the spec
-```
+To answer:
+1. Edit `specd_review.yaml`
+2. Fill in your decision for each finding
+3. Run `/specd:loop` again
 
 Common decisions:
-
-- **"Fix the code"** → adds work item to fix the code
-- **"Update the spec"** → updates spec first, then adds work item
-- **"Ignore"** → deletes the review item, takes no action
-- **"Keep as is"** → deletes the review item, code is correct
-
-When you run `/specd:loop` again, the review intake interprets your decision and updates accordingly.
-
-## You handle everything else naturally
-
-Just tell the agent what to do:
-
-- "mark all specs ready"
-- "add a work item for X"
-- "show me the work list"
-- "commit what we have"
-
-The agent understands specd concepts and manages the files.
-
-## Output
-
-The extension sends progress messages to your main session:
-
-```
-🚀 Starting specd loop (audit: ready)
-📋 Running review intake...
-✅ Review intake complete
-🔨 Cycle 1: 12 items to process
-  ✓ Processed 1, 11 remaining
-...
-✅ Loop complete! 12 items, audit clean
-```
-
-When review items are found:
-
-```
-🔨 Cycle 1: 3 items to process
-  ✓ Processed 1, 2 remaining
-📋 2 review item(s) need your attention:
-## auth
-**Finding:** The spec says...
-...
-⏸️ Answer the review items above, then run /specd:loop to continue.
-```
-
-## Requirements
-
-Working directory must contain:
-
-- `specs/` directory with spec files
-- `AGENTS.md` with agent guidelines
-- `specs/README.md` with spec index
-
-Prompts and file parsers are bundled with the extension.
+- **"Fix the code"** — adds work item to fix code
+- **"Update the spec"** — updates spec, then adds work item
+- **"Ignore"** — deletes finding, no action
+- **"Keep as is"** — deletes finding, code is correct

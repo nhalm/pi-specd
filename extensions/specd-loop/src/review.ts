@@ -1,3 +1,7 @@
+import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { resolve, dirname } from 'node:path';
+import yaml from 'js-yaml';
+
 export interface ReviewFinding {
   spec: string;
   finding: string;
@@ -16,31 +20,64 @@ export const EMPTY_REVIEW_LIST: ReviewList = {
   findings: [],
 };
 
-export const REVIEW_FILE = "specd_review.yaml";
+export const REVIEW_FILE = 'specd_review.yaml';
 
 export async function loadReviewList(cwd: string): Promise<ReviewList> {
   const filePath = resolve(cwd, REVIEW_FILE);
   try {
-    const content = await readFile(filePath, "utf-8");
-    return parseReviewYaml(content);
+    const content = await readFile(filePath, 'utf-8');
+    const parsed = yaml.load(content) as ReviewList;
+    if (!parsed || typeof parsed !== 'object') {
+      return EMPTY_REVIEW_LIST;
+    }
+    return normalizeReviewList(parsed);
   } catch {
     return EMPTY_REVIEW_LIST;
   }
 }
 
-export async function saveReviewList(
-  cwd: string,
-  reviewList: ReviewList,
-): Promise<void> {
+export async function saveReviewList(cwd: string, reviewList: ReviewList): Promise<void> {
   const filePath = resolve(cwd, REVIEW_FILE);
   const dir = dirname(filePath);
   await mkdir(dir, { recursive: true });
-  const content = stringifyReviewYaml(reviewList);
-  await writeFile(filePath, content, "utf-8");
+  const content = yaml.dump({ findings: reviewList.findings }, { indent: 2, lineWidth: -1 });
+  await writeFile(filePath, content, 'utf-8');
+}
+
+function normalizeReviewList(data: unknown): ReviewList {
+  if (!data || typeof data !== 'object') {
+    return EMPTY_REVIEW_LIST;
+  }
+
+  const obj = data as Record<string, unknown>;
+  const findings: ReviewFinding[] = [];
+
+  if (Array.isArray(obj.findings)) {
+    for (const f of obj.findings) {
+      if (f && typeof f === 'object') {
+        const finding = f as Record<string, unknown>;
+        findings.push({
+          spec: String(finding.spec || ''),
+          finding: String(finding.finding || ''),
+          code: String(finding.code || ''),
+          specText: String(finding.specText || finding.spec || ''),
+          options: String(finding.options || ''),
+          recommendation: String(finding.recommendation || ''),
+          decision: finding.decision ? String(finding.decision) : undefined,
+        });
+      }
+    }
+  }
+
+  return { findings };
 }
 
 export function getUndecided(findings: ReviewFinding[]): ReviewFinding[] {
   return findings.filter((f) => !f.decision);
+}
+
+export function getUndecidedFromList(list: ReviewList): ReviewFinding[] {
+  return getUndecided(list.findings);
 }
 
 export function addFinding(
@@ -64,11 +101,7 @@ export function addFinding(
   return item;
 }
 
-export function setDecision(
-  list: ReviewList,
-  index: number,
-  decision: string,
-): void {
+export function setDecision(list: ReviewList, index: number, decision: string): void {
   if (list.findings[index]) {
     list.findings[index].decision = decision;
   }
@@ -76,91 +109,4 @@ export function setDecision(
 
 export function removeFinding(list: ReviewList, index: number): void {
   list.findings.splice(index, 1);
-}
-
-import { readFile, writeFile, mkdir } from "node:fs/promises";
-import { resolve, dirname } from "node:path";
-
-function parseReviewYaml(content: string): ReviewList {
-  const result: ReviewList = { findings: [] };
-  if (!content.trim()) return result;
-
-  let currentFinding: ReviewFinding | null = null;
-  let currentKey = "";
-
-  for (const line of content.split("\n")) {
-    const trimmed = line.trim();
-
-    // New finding section
-    if (trimmed.startsWith("## ")) {
-      if (currentFinding) {
-        result.findings.push(currentFinding);
-      }
-      currentFinding = {
-        spec: trimmed.slice(3),
-        finding: "",
-        code: "",
-        specText: "",
-        options: "",
-        recommendation: "",
-      };
-      currentKey = "";
-      continue;
-    }
-
-    if (!currentFinding) continue;
-
-    // Key-value pairs
-    const kvMatch = /^(\w+):\s*(.*)$/.exec(trimmed);
-    if (kvMatch) {
-      currentKey = kvMatch[1].toLowerCase();
-      const value = kvMatch[2];
-
-      switch (currentKey) {
-        case "finding":
-          currentFinding.finding = value;
-          break;
-        case "code":
-          currentFinding.code = value;
-          break;
-        case "spec":
-          currentFinding.specText = value;
-          break;
-        case "options":
-          currentFinding.options = value;
-          break;
-        case "recommendation":
-          currentFinding.recommendation = value;
-          break;
-        case "decision":
-          currentFinding.decision = value;
-          break;
-      }
-    }
-  }
-
-  if (currentFinding) {
-    result.findings.push(currentFinding);
-  }
-
-  return result;
-}
-
-function stringifyReviewYaml(list: ReviewList): string {
-  const lines: string[] = [];
-
-  for (const finding of list.findings) {
-    lines.push(`## ${finding.spec}`);
-    lines.push(`finding: ${finding.finding}`);
-    lines.push(`code: ${finding.code}`);
-    lines.push(`spec: ${finding.specText}`);
-    lines.push(`options: ${finding.options}`);
-    lines.push(`recommendation: ${finding.recommendation}`);
-    if (finding.decision) {
-      lines.push(`decision: ${finding.decision}`);
-    }
-    lines.push("");
-  }
-
-  return `${lines.join("\n").trim()}\n`;
 }
