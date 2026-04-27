@@ -1,8 +1,8 @@
 {
-  "name": "github.com/nhalm/pi-extensions",
+  "name": "@nhalm/pi-specd",
   "version": "1.0.0",
   "type": "module",
-  "description": "Justify portal prompts and extensions",
+  "description": "Spec-driven development workflow for pi",
   "keywords": [
     "pi-package"
   ],
