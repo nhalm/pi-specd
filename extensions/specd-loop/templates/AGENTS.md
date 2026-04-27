@@ -14,6 +14,7 @@
 **The bar for a finding is: will this cause a bug in production?** Not "could this theoretically be a problem" — will it actually break?
 
 Before reporting a finding:
+
 - **Read the actual code, not just the spec.** Findings based on spec text alone are unreliable. The code is ground truth.
 - **Check if it's actually reachable.** Trace the code path. If it requires multiple unlikely conditions, it's not a finding.
 - **Check if the spec section is prescriptive.** "Notes" and "Design decisions" are commentary, not requirements.
@@ -22,11 +23,11 @@ Before reporting a finding:
 
 The loop runs autonomously via the `/specd:loop` command. Commands are defined by the specd-loop extension.
 
-| Command | Purpose |
-|---------|---------|
-| `/specd:loop` | Run the automated loop: review intake → implement → audit |
-| `/specd:plan` | Create or update specs and work items |
-| `/specd:status` | Show current work list status |
+| Command         | Purpose                                                   |
+| --------------- | --------------------------------------------------------- |
+| `/specd:loop`   | Run the automated loop: review intake → implement → audit |
+| `/specd:plan`   | Create or update specs and work items                     |
+| `/specd:status` | Show current work list status                             |
 
 ## Work List
 

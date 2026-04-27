@@ -1,5 +1,6 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { resolve, dirname } from 'node:path';
+
 import yaml from 'js-yaml';
 
 import type { WorkList, Spec, WorkItem } from './types.js';
@@ -66,9 +67,7 @@ function normalizeWorkList(data: unknown): WorkList {
 }
 
 export function getUnblockedItems(workList: WorkList): WorkItem[] {
-  return workList.specs
-    .flatMap((s) => s.items)
-    .filter((item) => !item.completed && !item.blocked);
+  return workList.specs.flatMap((s) => s.items).filter((item) => !item.completed && !item.blocked);
 }
 
 export function getNextItem(workList: WorkList): WorkItem | null {

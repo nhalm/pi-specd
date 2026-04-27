@@ -1,12 +1,12 @@
 import type { ExtensionAPI } from '@mariozechner/pi-coding-agent';
 
 import { runLoop } from './src/loop.js';
-import { loadReviewList, getUndecided } from './src/review.js';
-import { loadWorkList, getUnblockedItems } from './src/worklist.js';
-import { runSetup, checkVersion } from './src/setup.js';
-import { runPlan } from './src/plan.js';
 import { runMigrate } from './src/migrate.js';
+import { runPlan } from './src/plan.js';
+import { loadReviewList, getUndecided } from './src/review.js';
+import { runSetup, checkVersion } from './src/setup.js';
 import { EXTENSION_VERSION } from './src/version.js';
+import { loadWorkList, getUnblockedItems } from './src/worklist.js';
 
 export default function (pi: ExtensionAPI) {
   // ─────────────────────────────────────────────────────────
@@ -68,7 +68,10 @@ export default function (pi: ExtensionAPI) {
       // Check version
       const versionCheck = await checkVersion(ctx.cwd);
       if (!versionCheck.ok) {
-        ctx.ui.notify(versionCheck.message + '\n\nRun /specd:setup first, or continue at your own risk.', 'warn');
+        ctx.ui.notify(
+          `${versionCheck.message}\n\nRun /specd:setup first, or continue at your own risk.`,
+          'warn',
+        );
         // Continue anyway - user might want to proceed
       }
 
@@ -85,7 +88,10 @@ export default function (pi: ExtensionAPI) {
       // Check version
       const versionCheck = await checkVersion(ctx.cwd);
       if (!versionCheck.ok) {
-        ctx.ui.notify(versionCheck.message + '\n\nRun /specd:setup first, or continue at your own risk.', 'warn');
+        ctx.ui.notify(
+          `${versionCheck.message}\n\nRun /specd:setup first, or continue at your own risk.`,
+          'warn',
+        );
         // Continue anyway - user might want to proceed
       }
 

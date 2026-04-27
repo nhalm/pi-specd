@@ -2,8 +2,8 @@ import { writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { EXTENSION_VERSION } from './version.js';
 import { runPiPrompt } from './pi-runner.js';
+import { EXTENSION_VERSION } from './version.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = fileURLToPath(resolve(import.meta.url, '..'));
@@ -96,7 +96,7 @@ export async function runMigrate(
   try {
     await writeFile(
       specdFilePath,
-      JSON.stringify({ version: EXTENSION_VERSION, migratedAt: new Date().toISOString() }, null, 2) + '\n',
+      `${JSON.stringify({ version: EXTENSION_VERSION, migratedAt: new Date().toISOString() }, null, 2)}\n`,
       'utf-8',
     );
     if (ui) {

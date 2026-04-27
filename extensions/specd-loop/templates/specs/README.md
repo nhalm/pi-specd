@@ -24,13 +24,11 @@ Draft → Ready → Implemented
 
 **Dependencies** — Only implement features if their dependencies are Ready or Implemented.
 
-
-
 ## Spec Index
 
-| Spec | Status | Description |
-|------|--------|-------------|
-| _Add specs here_ | | |
+| Spec             | Status | Description |
+| ---------------- | ------ | ----------- |
+| _Add specs here_ |        |             |
 
 ---
 
@@ -43,8 +41,8 @@ Each spec is a markdown file in this directory.
 ```markdown
 # Feature Name
 
-| | |
-|--------|--------------|
+|        |       |
+| ------ | ----- |
 | Status | Draft |
 
 ## Overview
@@ -52,10 +50,12 @@ Each spec is a markdown file in this directory.
 What this component does.
 
 **Scope:**
+
 - What it handles
 - What it explicitly does NOT handle
 
 **Dependencies:**
+
 - other-spec.md — what we need from it
 
 ## Specification
@@ -63,11 +63,13 @@ What this component does.
 Detailed behavior, contracts, and interfaces. Must be complete enough for implementation without asking questions.
 
 ### API (if applicable)
+
 - Endpoint definitions
 - Request/response formats
 - Error codes
 
 ### Data Model (if applicable)
+
 - Schema definitions
 - Validations
 
@@ -78,12 +80,15 @@ Optional: open questions to resolve before moving to Ready.
 ## Writing Good Specs
 
 **Do:**
+
 - Define behavior, not code structure
 - Include concrete acceptance criteria
 - Specify error cases and edge cases
 - Use precise language ("returns X" not "should return X")
 
 **Don't:**
+
 - Prescribe file names or function names
 - Specify implementation patterns
 - Include rationale or "why" explanations
+```

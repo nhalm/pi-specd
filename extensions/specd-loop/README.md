@@ -31,6 +31,7 @@ Spec-driven development workflow for pi. You describe what to build, specs guide
 ### /specd:migrate
 
 Migrate an existing nhalm/specd project to specd-loop format. Removes:
+
 - Spec versions and changelogs
 - Spec status (Draft/Ready/Implemented)
 - Status column from specs/README.md
@@ -40,6 +41,7 @@ Migrate an existing nhalm/specd project to specd-loop format. Removes:
 Initialize specd in a new project. Detects your project's build/test commands and conventions.
 
 Creates:
+
 - `AGENTS.md` — Agent guidelines
 - `PROJECT.md` — Your project settings
 - `specs/README.md` — Spec index and format guide
@@ -56,10 +58,10 @@ Create or update specs and work items.
 
 Run the automated loop.
 
-| Option | Description |
-|--------|-------------|
-| `--full-audit` | Audit all specs (not just those in work list) |
-| `--skip-audit` | Skip the audit phase |
+| Option           | Description                                    |
+| ---------------- | ---------------------------------------------- |
+| `--full-audit`   | Audit all specs (not just those in work list)  |
+| `--skip-audit`   | Skip the audit phase                           |
 | `--max-cycles=N` | Override max implement iterations (default: 5) |
 
 ### /specd:status
@@ -68,14 +70,14 @@ Show work list status: unblocked items, blocked items, pending reviews.
 
 ## Files
 
-| File | Purpose | Committed? |
-|------|---------|-------------|
-| `AGENTS.md` | Agent instructions | Yes |
-| `PROJECT.md` | Build/test commands, conventions | Yes |
-| `specs/*.md` | Your specifications | Yes |
-| `specd_work_list.yaml` | Work queue | No |
-| `specd_review.yaml` | Pending decisions | No |
-| `.pi-specd` | Version info | No |
+| File                   | Purpose                          | Committed? |
+| ---------------------- | -------------------------------- | ---------- |
+| `AGENTS.md`            | Agent instructions               | Yes        |
+| `PROJECT.md`           | Build/test commands, conventions | Yes        |
+| `specs/*.md`           | Your specifications              | Yes        |
+| `specd_work_list.yaml` | Work queue                       | No         |
+| `specd_review.yaml`    | Pending decisions                | No         |
+| `.pi-specd`            | Version info                     | No         |
 
 The work/review files and `.pi-specd` are gitignored.
 
@@ -84,11 +86,13 @@ The work/review files and `.pi-specd` are gitignored.
 When the audit finds something ambiguous, it pauses and writes a finding to `specd_review.yaml`.
 
 To answer:
+
 1. Edit `specd_review.yaml`
 2. Fill in your decision for each finding
 3. Run `/specd:loop` again
 
 Common decisions:
+
 - **"Fix the code"** — adds work item to fix code
 - **"Update the spec"** — updates spec, then adds work item
 - **"Ignore"** — deletes finding, no action

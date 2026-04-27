@@ -1,6 +1,6 @@
+import { existsSync } from 'node:fs';
 import { readFile, writeFile, mkdir, copyFile } from 'node:fs/promises';
-import { resolve, dirname, join } from 'node:path';
-import { existsSync, readdirSync } from 'node:fs';
+import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { EXTENSION_VERSION } from './version.js';
@@ -132,21 +132,25 @@ async function detectConventions(cwd: string): Promise<string[]> {
 // ─────────────────────────────────────────────────────────
 
 function generatePROJECTMd(ctx: SetupContext): string {
-  const buildSection = ctx.buildCommands.length > 0
-    ? ctx.buildCommands.map((c) => `- ${c}`).join('\n')
-    : '<!-- Add your build commands here, e.g.:\n- npm run build\n- make build -->';
+  const buildSection =
+    ctx.buildCommands.length > 0
+      ? ctx.buildCommands.map((c) => `- ${c}`).join('\n')
+      : '<!-- Add your build commands here, e.g.:\n- npm run build\n- make build -->';
 
-  const testSection = ctx.testCommands.length > 0
-    ? ctx.testCommands.map((c) => `- ${c}`).join('\n')
-    : '<!-- Add your test commands here, e.g.:\n- npm test\n- make test -->';
+  const testSection =
+    ctx.testCommands.length > 0
+      ? ctx.testCommands.map((c) => `- ${c}`).join('\n')
+      : '<!-- Add your test commands here, e.g.:\n- npm test\n- make test -->';
 
-  const lintSection = ctx.lintCommands.length > 0
-    ? ctx.lintCommands.map((c) => `- ${c}`).join('\n')
-    : '<!-- Add lint/format commands if any -->';
+  const lintSection =
+    ctx.lintCommands.length > 0
+      ? ctx.lintCommands.map((c) => `- ${c}`).join('\n')
+      : '<!-- Add lint/format commands if any -->';
 
-  const conventionsSection = ctx.conventions.length > 0
-    ? ctx.conventions.map((c) => `- ${c}`).join('\n')
-    : '<!-- Add language/framework conventions -->';
+  const conventionsSection =
+    ctx.conventions.length > 0
+      ? ctx.conventions.map((c) => `- ${c}`).join('\n')
+      : '<!-- Add language/framework conventions -->';
 
   return `# ${ctx.projectName}
 
@@ -273,16 +277,14 @@ async function updateGitignore(cwd: string): Promise<boolean> {
 // Main setup
 // ─────────────────────────────────────────────────────────
 
-export async function runSetup(
-  ctx: {
-    cwd: string;
-    ui: {
-      notify(msg: string, type: string): void;
-      prompt(question: string): Promise<string>;
-      confirm(question: string): Promise<boolean>;
-    };
-  },
-): Promise<SetupResult> {
+export async function runSetup(ctx: {
+  cwd: string;
+  ui: {
+    notify(msg: string, type: string): void;
+    prompt(question: string): Promise<string>;
+    confirm(question: string): Promise<boolean>;
+  };
+}): Promise<SetupResult> {
   const cwd = ctx.cwd;
   const result: SetupResult = { copied: [], skipped: [], errors: [] };
 
@@ -430,7 +432,7 @@ export async function runSetup(
   try {
     await writeFile(
       specdFilePath,
-      JSON.stringify({ version: EXTENSION_VERSION, setupAt: new Date().toISOString() }, null, 2) + '\n',
+      `${JSON.stringify({ version: EXTENSION_VERSION, setupAt: new Date().toISOString() }, null, 2)}\n`,
       'utf-8',
     );
     result.copied.push('.pi-specd');
