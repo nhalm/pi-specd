@@ -1,6 +1,8 @@
+import { resolve } from 'node:path';
+
 import type { ExtensionAPI } from '@mariozechner/pi-coding-agent';
 
-import { type getUndecided } from './review.js';
+import { REVIEW_FILE, type ReviewFinding } from './review.js';
 
 export function sendProgress(
   pi: ExtensionAPI,
@@ -14,23 +16,50 @@ export function sendProgress(
 }
 
 // Surface review items to main session
-export async function surfaceReviewItems(
-  pi: ExtensionAPI,
-  cwd: string,
-  findings: Awaited<ReturnType<typeof getUndecided>>,
-) {
-  sendProgress(pi, 'info', `📋 ${findings.length} review item(s) need your attention:`);
+export function surfaceReviewItems(pi: ExtensionAPI, cwd: string, findings: ReviewFinding[]) {
+  const reviewPath = resolve(cwd, REVIEW_FILE);
+
+  sendProgress(
+    pi,
+    'info',
+    `📋 ${findings.length} review item(s) need a decision.\n\nFile: ${reviewPath} (gitignored)\n\nAdd a \`decision:\` line under each finding (see options listed in each item), then re-run \`/specd:loop\`.`,
+  );
 
   for (let i = 0; i < findings.length; i++) {
     const item = findings[i];
     pi.sendMessage(
       {
         customType: 'specd-review',
-        content: `## ${item.spec}\n\n**Finding:** ${item.finding}\n\n**Code:** ${item.code}\n\n**Spec:** ${item.specText}\n\n**Options:** ${item.options}\n\n**Recommendation:** ${item.recommendation}\n\nTo answer, edit specd_review.yaml and add \`decision: <your answer>\` to this finding.`,
+        content: [
+          `## [${i + 1}] ${item.spec}`,
+          ``,
+          `**Finding:** ${item.finding}`,
+          ``,
+          `**Code:** ${item.code}`,
+          ``,
+          `**Spec:** ${item.specText}`,
+          ``,
+          `**Options:** ${item.options}`,
+          ``,
+          `**Recommendation:** ${item.recommendation}`,
+          ``,
+          `Add a decision in \`${reviewPath}\`. Common values: \`Fix the code\`, \`Update the spec\`, \`Ignore\`, \`Keep as is\`. Example:`,
+          ``,
+          '```yaml',
+          `- spec: ${item.spec}`,
+          `  finding: ${shortenForExample(item.finding)}`,
+          `  decision: Fix the code`,
+          '```',
+        ].join('\n'),
         display: true,
         details: { index: i },
       },
       { triggerTurn: true },
     );
   }
+}
+
+function shortenForExample(text: string): string {
+  const firstLine = text.split('\n')[0];
+  return firstLine.length > 80 ? `${firstLine.slice(0, 77)}...` : firstLine;
 }

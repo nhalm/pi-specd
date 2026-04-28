@@ -1,12 +1,35 @@
-import type { ExtensionAPI } from '@mariozechner/pi-coding-agent';
+import type { ExtensionAPI, ExtensionCommandContext } from '@mariozechner/pi-coding-agent';
 
 import { runLoop } from './src/loop.js';
 import { runMigrate } from './src/migrate.js';
 import { runPlan } from './src/plan.js';
 import { loadReviewList, getUndecided } from './src/review.js';
-import { runSetup, checkVersion } from './src/setup.js';
+import { runSetup, checkVersion, ensureSpecdSetup, SETUP_REQUIRED_PATHS } from './src/setup.js';
 import { EXTENSION_VERSION } from './src/version.js';
-import { loadWorkList, getUnblockedItems } from './src/worklist.js';
+import {
+  loadWorkList,
+  getUnblockedItems,
+  getBlockedItems,
+  getCompletedCount,
+} from './src/worklist.js';
+
+async function preflight(ctx: ExtensionCommandContext): Promise<boolean> {
+  const setupCheck = await ensureSpecdSetup(ctx.cwd);
+  if (!setupCheck.ok) {
+    ctx.ui.notify(
+      `❌ specd is not initialized in this project. Missing: ${setupCheck.missing.join(', ')}\n\nRun /specd:setup first.`,
+      'error',
+    );
+    return false;
+  }
+
+  const versionCheck = await checkVersion(ctx.cwd);
+  if (!versionCheck.ok) {
+    ctx.ui.notify(`${versionCheck.message}\n\nContinuing anyway.`, 'warning');
+  }
+
+  return true;
+}
 
 export default function (pi: ExtensionAPI) {
   // ─────────────────────────────────────────────────────────
@@ -15,7 +38,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand('specd:migrate', {
     description: 'Migrate from nhalm/specd format to specd-loop format',
     async handler(_args, ctx) {
-      const result = await runMigrate(ctx.cwd, ctx.ui);
+      const result = await runMigrate(ctx);
 
       if (!result.success) {
         ctx.ui.notify('Migration failed. Check output above for details.', 'error');
@@ -27,7 +50,7 @@ export default function (pi: ExtensionAPI) {
   // /specd:setup - Initialize specd in the project
   // ─────────────────────────────────────────────────────────
   pi.registerCommand('specd:setup', {
-    description: 'Initialize specd files (AGENTS.md, PROJECT.md, specs/)',
+    description: `Initialize specd in this project (creates ${SETUP_REQUIRED_PATHS.join(', ')})`,
     async handler(_args, ctx) {
       const result = await runSetup(ctx);
 
@@ -65,17 +88,8 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand('specd:plan', {
     description: 'Create or update specs and work items',
     async handler(_args, ctx) {
-      // Check version
-      const versionCheck = await checkVersion(ctx.cwd);
-      if (!versionCheck.ok) {
-        ctx.ui.notify(
-          `${versionCheck.message}\n\nRun /specd:setup first, or continue at your own risk.`,
-          'warn',
-        );
-        // Continue anyway - user might want to proceed
-      }
-
-      await runPlan(ctx.cwd, ctx.ui);
+      if (!(await preflight(ctx))) return;
+      await runPlan(ctx);
     },
   });
 
@@ -83,18 +97,9 @@ export default function (pi: ExtensionAPI) {
   // /specd:loop - Run the full loop
   // ─────────────────────────────────────────────────────────
   pi.registerCommand('specd:loop', {
-    description: 'Run specd implementation loop (review → implement → audit)',
+    description: 'Run the implementation loop. Flags: --skip-audit, --max-cycles=N (default 5)',
     async handler(args, ctx) {
-      // Check version
-      const versionCheck = await checkVersion(ctx.cwd);
-      if (!versionCheck.ok) {
-        ctx.ui.notify(
-          `${versionCheck.message}\n\nRun /specd:setup first, or continue at your own risk.`,
-          'warn',
-        );
-        // Continue anyway - user might want to proceed
-      }
-
+      if (!(await preflight(ctx))) return;
       await runLoop(pi, ctx, args);
     },
   });
@@ -109,14 +114,14 @@ export default function (pi: ExtensionAPI) {
       const reviewList = await loadReviewList(ctx.cwd);
 
       const unblocked = getUnblockedItems(workList);
-      const blocked = workList.specs.flatMap((s) =>
-        s.items.filter((i) => !i.completed && i.blocked),
-      );
+      const blocked = getBlockedItems(workList);
+      const completed = getCompletedCount(workList);
       const undecided = getUndecided(reviewList.findings);
 
       let msg = `📋 Specd Status\n`;
       msg += `   Ready items: ${unblocked.length}\n`;
       msg += `   Blocked: ${blocked.length}\n`;
+      msg += `   Completed: ${completed}\n`;
       msg += `   Pending review: ${undecided.length}\n\n`;
 
       if (unblocked.length > 0) {
@@ -138,7 +143,19 @@ export default function (pi: ExtensionAPI) {
         msg += `\n**Review needed:** ${undecided.length} finding(s)\n`;
       }
 
+      msg += `\n→ ${nextAction(unblocked.length, undecided.length)}`;
+
       ctx.ui.notify(msg, 'info');
     },
   });
+}
+
+function nextAction(unblocked: number, undecided: number): string {
+  if (undecided > 0) {
+    return 'Edit specd_review.yaml to record decisions, then run /specd:loop.';
+  }
+  if (unblocked > 0) {
+    return 'Run /specd:loop to start working through ready items.';
+  }
+  return 'Run /specd:plan to add new specs and work items.';
 }

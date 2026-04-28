@@ -1,25 +1,18 @@
-interface UiContext {
-  setWidget(name: string, lines: string[] | undefined): void;
-}
-
-interface WidgetContext {
-  ui: UiContext;
-}
+import type { ExtensionCommandContext } from '@mariozechner/pi-coding-agent';
 
 export function showWidget(
-  ctx: WidgetContext,
+  ctx: ExtensionCommandContext,
   phase: string,
   cycle: number,
   maxCycles: number,
   itemsRemaining: number,
   status: string,
 ) {
-  const lines = [
+  ctx.ui.setWidget('specd-loop', [
     ` specd-loop | ${phase} | Cycle ${cycle}/${maxCycles} | ${itemsRemaining} items | ${status}`,
-  ];
-  ctx.ui.setWidget('specd-loop', lines);
+  ]);
 }
 
-export function clearWidget(ctx: WidgetContext) {
+export function clearWidget(ctx: ExtensionCommandContext) {
   ctx.ui.setWidget('specd-loop', undefined);
 }
