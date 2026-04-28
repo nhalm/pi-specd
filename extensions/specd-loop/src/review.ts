@@ -1,7 +1,9 @@
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
-import { resolve, dirname } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
 
 import yaml from 'js-yaml';
+
+import { isRecord, asString } from './yaml-helpers.js';
 
 export interface ReviewFinding {
   spec: string;
@@ -17,56 +19,50 @@ export interface ReviewList {
   findings: ReviewFinding[];
 }
 
-export const EMPTY_REVIEW_LIST: ReviewList = {
-  findings: [],
-};
+const EMPTY_REVIEW_LIST: ReviewList = { findings: [] };
 
 export const REVIEW_FILE = 'specd_review.yaml';
 
 export async function loadReviewList(cwd: string): Promise<ReviewList> {
   const filePath = resolve(cwd, REVIEW_FILE);
+  let content: string;
   try {
-    const content = await readFile(filePath, 'utf-8');
-    const parsed = yaml.load(content) as ReviewList;
-    if (!parsed || typeof parsed !== 'object') {
+    content = await readFile(filePath, 'utf-8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
       return EMPTY_REVIEW_LIST;
     }
-    return normalizeReviewList(parsed);
-  } catch {
-    return EMPTY_REVIEW_LIST;
+    throw new Error(`Failed to read ${REVIEW_FILE}: ${(err as Error).message}`);
   }
-}
-
-export async function saveReviewList(cwd: string, reviewList: ReviewList): Promise<void> {
-  const filePath = resolve(cwd, REVIEW_FILE);
-  const dir = dirname(filePath);
-  await mkdir(dir, { recursive: true });
-  const content = yaml.dump({ findings: reviewList.findings }, { indent: 2, lineWidth: -1 });
-  await writeFile(filePath, content, 'utf-8');
+  let parsed: unknown;
+  try {
+    parsed = yaml.load(content);
+  } catch (err) {
+    throw new Error(`Failed to parse ${REVIEW_FILE} as YAML: ${(err as Error).message}`);
+  }
+  return normalizeReviewList(parsed);
 }
 
 function normalizeReviewList(data: unknown): ReviewList {
-  if (!data || typeof data !== 'object') {
+  if (!isRecord(data)) {
     return EMPTY_REVIEW_LIST;
   }
 
-  const obj = data as Record<string, unknown>;
   const findings: ReviewFinding[] = [];
 
-  if (Array.isArray(obj.findings)) {
-    for (const f of obj.findings) {
-      if (f && typeof f === 'object') {
-        const finding = f as Record<string, unknown>;
-        findings.push({
-          spec: String(finding.spec || ''),
-          finding: String(finding.finding || ''),
-          code: String(finding.code || ''),
-          specText: String(finding.specText || finding.spec || ''),
-          options: String(finding.options || ''),
-          recommendation: String(finding.recommendation || ''),
-          decision: finding.decision ? String(finding.decision) : undefined,
-        });
-      }
+  if (Array.isArray(data.findings)) {
+    for (const f of data.findings) {
+      if (!isRecord(f)) continue;
+      const spec = asString(f.spec);
+      findings.push({
+        spec,
+        finding: asString(f.finding),
+        code: asString(f.code),
+        specText: asString(f.specText, spec),
+        options: asString(f.options),
+        recommendation: asString(f.recommendation),
+        decision: typeof f.decision === 'string' ? f.decision : undefined,
+      });
     }
   }
 
@@ -75,39 +71,4 @@ function normalizeReviewList(data: unknown): ReviewList {
 
 export function getUndecided(findings: ReviewFinding[]): ReviewFinding[] {
   return findings.filter((f) => !f.decision);
-}
-
-export function getUndecidedFromList(list: ReviewList): ReviewFinding[] {
-  return getUndecided(list.findings);
-}
-
-export function addFinding(
-  list: ReviewList,
-  spec: string,
-  finding: string,
-  code: string,
-  specText: string,
-  options: string,
-  recommendation: string,
-): ReviewFinding {
-  const item: ReviewFinding = {
-    spec,
-    finding,
-    code,
-    specText,
-    options,
-    recommendation,
-  };
-  list.findings.push(item);
-  return item;
-}
-
-export function setDecision(list: ReviewList, index: number, decision: string): void {
-  if (list.findings[index]) {
-    list.findings[index].decision = decision;
-  }
-}
-
-export function removeFinding(list: ReviewList, index: number): void {
-  list.findings.splice(index, 1);
 }

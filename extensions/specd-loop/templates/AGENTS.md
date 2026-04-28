@@ -5,7 +5,7 @@
 - **Spec is source of truth.** If code contradicts the spec, the code is wrong — refactor it.
 - **Re-read specs on changes.** When a spec is updated, re-read it to understand the new requirements.
 - **Don't build on broken foundations.** If existing code uses the wrong model (e.g., wrong ID scheme, wrong data flow), fix it first. Don't add new features on top of incorrect code.
-- **Spec index:** `specs/README.md` lists all specifications. Only specs with status "Ready" should be implemented.
+- **Spec index:** `specs/README.md` lists all specifications.
 
 # Audit Discipline
 
@@ -31,9 +31,13 @@ The loop runs autonomously via the `/specd:loop` command. Commands are defined b
 
 ## Work List
 
-`specd_work_list.yaml` is the execution queue. Read it at the start of each iteration. Pick an unblocked item, implement it, then mark it complete.
+`specd_work_list.yaml` is the execution queue, but only certain workflows touch it:
 
-Items with `(blocked: reason)` are skipped until the blocker is resolved.
+- **Planning** writes new items.
+- **Review intake** and **audit** append items derived from decisions or findings.
+- **Implementation** does NOT read or write the work list — the loop driver picks one item and tells the implementer what to work on, then marks it complete after a successful commit.
+
+Items with a `blocked: <reason>` field are skipped until a planning pass clears the blocker.
 
 ## Review List
 

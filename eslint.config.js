@@ -14,15 +14,10 @@ export default tseslint.config(
     languageOptions: {
       parserOptions: {
         projectService: {
-          allowDefaultProject: ['*.config.ts', '*.config.js'],
+          allowDefaultProject: ['*.config.ts', '*.config.js', 'scripts/*.mjs'],
         },
       },
     },
-  },
-  // Extension files use external types from pi-coding-agent
-  {
-    files: ['extensions/**/*'],
-    ...tseslint.configs.disableTypeChecked,
   },
   {
     rules: {
@@ -32,6 +27,10 @@ export default tseslint.config(
         { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
       ],
       '@typescript-eslint/require-await': 'off',
+      '@typescript-eslint/restrict-template-expressions': [
+        'error',
+        { allowNumber: true, allowBoolean: true },
+      ],
 
       // General
       eqeqeq: ['error', 'always'],

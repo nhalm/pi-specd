@@ -4,21 +4,28 @@ import { resolve, dirname } from 'node:path';
 import yaml from 'js-yaml';
 
 import type { WorkList, Spec, WorkItem } from './types.js';
+import { isRecord, asString } from './yaml-helpers.js';
 
 export const WORK_LIST_FILE = 'specd_work_list.yaml';
 
 export async function loadWorkList(cwd: string): Promise<WorkList> {
   const filePath = resolve(cwd, WORK_LIST_FILE);
+  let content: string;
   try {
-    const content = await readFile(filePath, 'utf-8');
-    const parsed = yaml.load(content) as WorkList;
-    if (!parsed || typeof parsed !== 'object') {
+    content = await readFile(filePath, 'utf-8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
       return { specs: [] };
     }
-    return normalizeWorkList(parsed);
-  } catch {
-    return { specs: [] };
+    throw new Error(`Failed to read ${WORK_LIST_FILE}: ${(err as Error).message}`);
   }
+  let parsed: unknown;
+  try {
+    parsed = yaml.load(content);
+  } catch (err) {
+    throw new Error(`Failed to parse ${WORK_LIST_FILE} as YAML: ${(err as Error).message}`);
+  }
+  return normalizeWorkList(parsed);
 }
 
 export async function saveWorkList(cwd: string, workList: WorkList): Promise<void> {
@@ -29,104 +36,98 @@ export async function saveWorkList(cwd: string, workList: WorkList): Promise<voi
   await writeFile(filePath, content, 'utf-8');
 }
 
-// Ensure the loaded work list has proper structure
 function normalizeWorkList(data: unknown): WorkList {
-  if (!data || typeof data !== 'object') {
+  if (!isRecord(data)) {
     return { specs: [] };
   }
 
-  const obj = data as Record<string, unknown>;
   const specs: Spec[] = [];
 
-  if (Array.isArray(obj.specs)) {
-    for (const spec of obj.specs) {
-      if (spec && typeof spec === 'object' && 'name' in spec) {
-        const s = spec as Record<string, unknown>;
-        const items: WorkItem[] = [];
+  if (Array.isArray(data.specs)) {
+    for (const spec of data.specs) {
+      if (!isRecord(spec) || !('name' in spec)) continue;
+      const name = asString(spec.name);
+      if (!name) continue; // a non-string or empty name is treated as no spec
+      const items: WorkItem[] = [];
 
-        if (Array.isArray(s.items)) {
-          for (const item of s.items) {
-            if (item && typeof item === 'object') {
-              const i = item as Record<string, unknown>;
-              items.push({
-                spec: String(s.name),
-                description: String(i.description || ''),
-                completed: Boolean(i.completed),
-                blocked: i.blocked ? String(i.blocked) : undefined,
-              });
-            }
+      if (Array.isArray(spec.items)) {
+        for (const item of spec.items) {
+          if (!isRecord(item)) continue;
+          const description = asString(item.description);
+          if (item.completed) {
+            items.push({ spec: name, description, completed: true });
+          } else {
+            items.push({
+              spec: name,
+              description,
+              completed: false,
+              blocked: typeof item.blocked === 'string' ? item.blocked : undefined,
+            });
           }
         }
-
-        specs.push({ name: String(s.name), items });
       }
+
+      specs.push({ name, items });
     }
   }
 
   return { specs };
 }
 
-export function getUnblockedItems(workList: WorkList): WorkItem[] {
-  return workList.specs.flatMap((s) => s.items).filter((item) => !item.completed && !item.blocked);
+type PendingItem = Extract<WorkItem, { completed: false }>;
+type BlockedItem = PendingItem & { blocked: string };
+
+export function getUnblockedItems(workList: WorkList): PendingItem[] {
+  return workList.specs
+    .flatMap((s) => s.items)
+    .filter((item): item is PendingItem => !item.completed && !item.blocked);
 }
 
-export function getNextItem(workList: WorkList): WorkItem | null {
-  const unblocked = getUnblockedItems(workList);
-  return unblocked.length > 0 ? unblocked[0] : null;
+export function getBlockedItems(workList: WorkList): BlockedItem[] {
+  return workList.specs
+    .flatMap((s) => s.items)
+    .filter(
+      (item): item is BlockedItem =>
+        !item.completed && typeof item.blocked === 'string' && item.blocked.length > 0,
+    );
 }
 
-export function completeItem(workList: WorkList, specName: string, description: string): void {
-  const spec = workList.specs.find((s) => s.name === specName);
-  if (!spec) return;
-
-  const item = spec.items.find((i) => i.description === description);
-  if (item) {
-    item.completed = true;
-    unblockItems(spec, item.description);
-  }
+export function pickNextItem(workList: WorkList): PendingItem | null {
+  return getUnblockedItems(workList)[0] ?? null;
 }
 
-function unblockItems(spec: Spec, completedDescription: string): void {
-  for (const item of spec.items) {
-    if (item.blocked?.includes(completedDescription)) {
-      item.blocked = undefined;
-    }
-  }
-}
-
-export function addSpec(workList: WorkList, name: string): Spec {
-  const existing = workList.specs.find((s) => s.name === name);
-  if (existing) return existing;
-
-  const spec: Spec = { name, items: [] };
-  workList.specs.push(spec);
-  return spec;
-}
-
-export function addItem(
+/**
+ * Flip `completed: true` for the item identified by spec + description.
+ * Returns true if a matching item was found and marked, false otherwise.
+ */
+export function markItemCompleted(
   workList: WorkList,
   specName: string,
   description: string,
-  blocked?: string,
-): WorkItem {
-  const spec = addSpec(workList, specName);
-  const item: WorkItem = {
-    spec: specName,
-    description,
-    blocked,
-    completed: false,
-  };
-  spec.items.push(item);
-  return item;
-}
-
-export function removeItem(workList: WorkList, specName: string, description: string): void {
+): boolean {
   const spec = workList.specs.find((s) => s.name === specName);
-  if (!spec) return;
-
-  spec.items = spec.items.filter((i) => i.description !== description);
+  if (!spec) return false;
+  const idx = spec.items.findIndex((i) => i.description === description && !i.completed);
+  if (idx === -1) return false;
+  const existing = spec.items[idx];
+  spec.items[idx] = { spec: existing.spec, description: existing.description, completed: true };
+  return true;
 }
 
-export function getSpecsInWorkList(workList: WorkList): string[] {
-  return workList.specs.map((s) => s.name);
+export function getCompletedCount(workList: WorkList): number {
+  return workList.specs.flatMap((s) => s.items).filter((item) => item.completed).length;
+}
+
+/**
+ * Drop specs from the work list when every item under them is `completed: true`.
+ * Returns the names of the specs that were dropped.
+ */
+export function pruneCompletedSpecs(workList: WorkList): string[] {
+  const dropped: string[] = [];
+  workList.specs = workList.specs.filter((spec) => {
+    const allDone = spec.items.length > 0 && spec.items.every((i) => i.completed);
+    if (allDone) dropped.push(spec.name);
+    return !allDone;
+  });
+  return dropped;
 }

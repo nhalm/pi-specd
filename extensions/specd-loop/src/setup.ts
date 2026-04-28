@@ -3,14 +3,16 @@ import { readFile, writeFile, mkdir, copyFile } from 'node:fs/promises';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import type { ExtensionCommandContext, ExtensionUIContext } from '@mariozechner/pi-coding-agent';
+
 import { EXTENSION_VERSION } from './version.js';
+import { isRecord } from './yaml-helpers.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const TEMPLATES_DIR = resolve(__dirname, '..', 'templates');
 
 interface SetupContext {
-  cwd: string;
   projectName: string;
   description: string;
   buildCommands: string[];
@@ -25,43 +27,49 @@ interface SetupResult {
   errors: string[];
 }
 
+export interface DetectedCommands {
+  build: string[];
+  test: string[];
+  lint: string[];
+}
+
+export type SetupCheckResult = { ok: true } | { ok: false; missing: string[] };
+
+export type VersionCheckResult = { ok: true } | { ok: false; message: string };
+
 // ─────────────────────────────────────────────────────────
 // Auto-detection helpers
 // ─────────────────────────────────────────────────────────
 
-async function detectProjectName(cwd: string): Promise<string | null> {
-  // Check package.json
-  const pkgPath = resolve(cwd, 'package.json');
-  if (existsSync(pkgPath)) {
-    try {
-      const pkg = JSON.parse(await readFile(pkgPath, 'utf-8'));
-      if (pkg.name) return pkg.name.replace(/^@[\w-]+\//, '');
-    } catch {
-      // ignore
-    }
-  }
+interface PackageJson {
+  name?: string;
+  scripts?: Record<string, string>;
+  dependencies?: Record<string, string>;
+  devDependencies?: Record<string, string>;
+}
 
-  // Check for directory name
+async function readPackageJson(cwd: string): Promise<PackageJson | null> {
+  const pkgPath = resolve(cwd, 'package.json');
+  if (!existsSync(pkgPath)) return null;
+  try {
+    const parsed: unknown = JSON.parse(await readFile(pkgPath, 'utf-8'));
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+async function detectProjectName(cwd: string): Promise<string | null> {
+  const pkg = await readPackageJson(cwd);
+  if (pkg?.name) return pkg.name.replace(/^@[\w-]+\//, '');
+
   const parts = cwd.split('/');
   return parts[parts.length - 1] || null;
 }
 
-async function detectCommands(cwd: string): Promise<{
-  build: string[];
-  test: string[];
-  lint: string[];
-}> {
-  const pkgPath = resolve(cwd, 'package.json');
-  const scripts: Record<string, string> = {};
-
-  if (existsSync(pkgPath)) {
-    try {
-      const pkg = JSON.parse(await readFile(pkgPath, 'utf-8'));
-      Object.assign(scripts, pkg.scripts || {});
-    } catch {
-      // ignore
-    }
-  }
+async function detectCommands(cwd: string): Promise<DetectedCommands> {
+  const pkg = await readPackageJson(cwd);
+  const scripts: Record<string, string> = pkg?.scripts ?? {};
 
   // Detect from scripts
   const build: string[] = [];
@@ -109,19 +117,14 @@ async function detectConventions(cwd: string): Promise<string[]> {
     conventions.push('Prettier for formatting');
   }
 
-  // Check for Jest
-  const pkgPath = resolve(cwd, 'package.json');
-  if (existsSync(pkgPath)) {
-    try {
-      const pkg = JSON.parse(await readFile(pkgPath, 'utf-8'));
-      const deps = { ...pkg.dependencies, ...pkg.devDependencies };
-      if (deps.jest) conventions.push('Jest for testing');
-      if (deps.vitest) conventions.push('Vitest for testing');
-      if (deps.prettier) conventions.push('Prettier for formatting');
-      if (deps.eslint) conventions.push('ESLint for linting');
-    } catch {
-      // ignore
-    }
+  // Check for Jest, Vitest, etc. via package.json deps
+  const pkg = await readPackageJson(cwd);
+  if (pkg) {
+    const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+    if (deps.jest) conventions.push('Jest for testing');
+    if (deps.vitest) conventions.push('Vitest for testing');
+    if (deps.prettier) conventions.push('Prettier for formatting');
+    if (deps.eslint) conventions.push('ESLint for linting');
   }
 
   return conventions;
@@ -236,7 +239,7 @@ Detailed behavior, contracts, and interfaces. Must be complete enough for implem
 
 ## Notes
 
-Optional: open questions to resolve before moving to Ready.
+Optional: open questions to resolve before the spec is considered complete.
 \`\`\`
 
 ## Writing Good Specs
@@ -258,11 +261,18 @@ Optional: open questions to resolve before moving to Ready.
 // Gitignore
 // ─────────────────────────────────────────────────────────
 
+// Normalize a .gitignore line for comparison: strip whitespace, leading slashes,
+// and trailing slashes so `.pi-specd`, `/.pi-specd`, and `.pi-specd/ ` all match.
+function normalizeGitignoreLine(line: string): string {
+  return line.trim().replace(/^\/+/, '').replace(/\/+$/, '');
+}
+
 async function updateGitignore(cwd: string): Promise<boolean> {
   const gitignorePath = resolve(cwd, '.gitignore');
   const entries = ['.pi-specd', 'specd_work_list.yaml', 'specd_review.yaml'];
   const existing = existsSync(gitignorePath) ? await readFile(gitignorePath, 'utf-8') : '';
-  const missing = entries.filter((e) => !existing.split('\n').includes(e));
+  const existingNormalized = new Set(existing.split('\n').map(normalizeGitignoreLine));
+  const missing = entries.filter((e) => !existingNormalized.has(normalizeGitignoreLine(e)));
 
   if (missing.length > 0) {
     const suffix = existing.endsWith('\n') || existing === '' ? '' : '\n';
@@ -274,17 +284,61 @@ async function updateGitignore(cwd: string): Promise<boolean> {
 }
 
 // ─────────────────────────────────────────────────────────
+// Main setup helpers
+// ─────────────────────────────────────────────────────────
+
+/** Show detected items and let the user accept or clear them. */
+async function confirmDetected(
+  ui: ExtensionUIContext,
+  label: string,
+  items: string[],
+): Promise<string[]> {
+  if (items.length === 0) return items;
+  const accepted = await ui.confirm(
+    label,
+    `${items.map((c) => `  - ${c}`).join('\n')}\nUse these?`,
+  );
+  return accepted ? items : [];
+}
+
+type WriteOp = { kind: 'copy'; src: string } | { kind: 'write'; content: string };
+
+/**
+ * Create a destination file unless it already exists. Records what happened in `result`.
+ * Pass `silent: true` to skip without recording — used for ephemeral state files where
+ * "already exists" isn't worth noticing.
+ */
+async function writeIfMissing(
+  result: SetupResult,
+  destAbs: string,
+  label: string,
+  op: WriteOp,
+  options: { silent?: boolean } = {},
+): Promise<void> {
+  if (existsSync(destAbs)) {
+    if (!options.silent) {
+      result.skipped.push(`${label} (already exists)`);
+    }
+    return;
+  }
+  try {
+    await mkdir(dirname(destAbs), { recursive: true });
+    if (op.kind === 'copy') {
+      await copyFile(op.src, destAbs);
+    } else {
+      await writeFile(destAbs, op.content, 'utf-8');
+    }
+    result.copied.push(label);
+  } catch (err) {
+    result.errors.push(`Failed to write ${label}: ${String(err)}`);
+  }
+}
+
+// ─────────────────────────────────────────────────────────
 // Main setup
 // ─────────────────────────────────────────────────────────
 
-export async function runSetup(ctx: {
-  cwd: string;
-  ui: {
-    notify(msg: string, type: string): void;
-    prompt(question: string): Promise<string>;
-    confirm(question: string): Promise<boolean>;
-  };
-}): Promise<SetupResult> {
+export async function runSetup(ctx: ExtensionCommandContext): Promise<SetupResult> {
   const cwd = ctx.cwd;
   const result: SetupResult = { copied: [], skipped: [], errors: [] };
 
@@ -297,133 +351,68 @@ export async function runSetup(ctx: {
 
   // Step 2: Ask questions
   const projectName =
-    (await ctx.ui.prompt(`Project name${detectedName ? ` [${detectedName}]` : ''}: `)) ||
-    detectedName ||
+    (await ctx.ui.input('Project name', detectedName ?? 'my-project')) ??
+    detectedName ??
     'my-project';
 
-  const description = await ctx.ui.prompt('One-line project description: ');
+  const description = (await ctx.ui.input('One-line project description')) ?? '';
 
-  let buildCommands = detectedCommands.build;
-  let testCommands = detectedCommands.test;
-  let lintCommands = detectedCommands.lint;
-
-  if (buildCommands.length > 0) {
-    const confirmed = await ctx.ui.confirm(
-      `Detected build commands:\n${buildCommands.map((c) => `  - ${c}`).join('\n')}\nUse these?`,
-    );
-    if (!confirmed) {
-      buildCommands = [];
-    }
-  }
-
-  if (testCommands.length > 0) {
-    const confirmed = await ctx.ui.confirm(
-      `Detected test commands:\n${testCommands.map((c) => `  - ${c}`).join('\n')}\nUse these?`,
-    );
-    if (!confirmed) {
-      testCommands = [];
-    }
-  }
-
-  if (lintCommands.length > 0) {
-    const confirmed = await ctx.ui.confirm(
-      `Detected lint/validation commands:\n${lintCommands.map((c) => `  - ${c}`).join('\n')}\nUse these?`,
-    );
-    if (!confirmed) {
-      lintCommands = [];
-    }
-  }
-
-  if (detectedConventions.length > 0) {
-    const confirmed = await ctx.ui.confirm(
-      `Detected conventions:\n${detectedConventions.map((c) => `  - ${c}`).join('\n')}\nUse these?`,
-    );
-    if (!confirmed) {
-      detectedConventions.length = 0;
-    }
-  }
+  const buildCommands = await confirmDetected(
+    ctx.ui,
+    'Detected build commands',
+    detectedCommands.build,
+  );
+  const testCommands = await confirmDetected(
+    ctx.ui,
+    'Detected test commands',
+    detectedCommands.test,
+  );
+  const lintCommands = await confirmDetected(
+    ctx.ui,
+    'Detected lint/validation commands',
+    detectedCommands.lint,
+  );
+  const conventions = await confirmDetected(ctx.ui, 'Detected conventions', detectedConventions);
 
   // Step 3: Generate files
   const setupCtx: SetupContext = {
-    cwd,
     projectName,
     description,
     buildCommands,
     testCommands,
     lintCommands,
-    conventions: detectedConventions,
+    conventions,
   };
 
-  // Write AGENTS.md
-  const agentsSrc = resolve(TEMPLATES_DIR, 'AGENTS.md');
-  const agentsDest = resolve(cwd, 'AGENTS.md');
-  if (!existsSync(agentsDest)) {
-    try {
-      await copyFile(agentsSrc, agentsDest);
-      result.copied.push('AGENTS.md');
-    } catch (err) {
-      result.errors.push(`Failed to copy AGENTS.md: ${err}`);
-    }
-  } else {
-    result.skipped.push('AGENTS.md (already exists)');
-  }
+  await writeIfMissing(result, resolve(cwd, 'AGENTS.md'), 'AGENTS.md', {
+    kind: 'copy',
+    src: resolve(TEMPLATES_DIR, 'AGENTS.md'),
+  });
+  await writeIfMissing(result, resolve(cwd, 'PROJECT.md'), 'PROJECT.md', {
+    kind: 'write',
+    content: generatePROJECTMd(setupCtx),
+  });
+  await writeIfMissing(result, resolve(cwd, 'specs/README.md'), 'specs/README.md', {
+    kind: 'write',
+    content: generateSpecsReadme(setupCtx),
+  });
+  // Ephemeral state files: silently skip if present (no "already exists" notice)
+  await writeIfMissing(
+    result,
+    resolve(cwd, 'specd_work_list.yaml'),
+    'specd_work_list.yaml',
+    { kind: 'copy', src: resolve(TEMPLATES_DIR, 'specd_work_list.yaml') },
+    { silent: true },
+  );
+  await writeIfMissing(
+    result,
+    resolve(cwd, 'specd_review.yaml'),
+    'specd_review.yaml',
+    { kind: 'copy', src: resolve(TEMPLATES_DIR, 'specd_review.yaml') },
+    { silent: true },
+  );
 
-  // Write PROJECT.md
-  const projectMdContent = generatePROJECTMd(setupCtx);
-  const projectMdDest = resolve(cwd, 'PROJECT.md');
-  if (!existsSync(projectMdDest)) {
-    try {
-      await writeFile(projectMdDest, projectMdContent, 'utf-8');
-      result.copied.push('PROJECT.md');
-    } catch (err) {
-      result.errors.push(`Failed to write PROJECT.md: ${err}`);
-    }
-  } else {
-    result.skipped.push('PROJECT.md (already exists)');
-  }
-
-  // Write specs/README.md
-  const specsDir = resolve(cwd, 'specs');
-  await mkdir(specsDir, { recursive: true });
-  const specsReadmeContent = generateSpecsReadme(setupCtx);
-  const specsReadmeDest = resolve(specsDir, 'README.md');
-  if (!existsSync(specsReadmeDest)) {
-    try {
-      await writeFile(specsReadmeDest, specsReadmeContent, 'utf-8');
-      result.copied.push('specs/README.md');
-    } catch (err) {
-      result.errors.push(`Failed to write specs/README.md: ${err}`);
-    }
-  } else {
-    result.skipped.push('specs/README.md (already exists)');
-  }
-
-  // Write ephemeral files
-  const workListSrc = resolve(TEMPLATES_DIR, 'specd_work_list.yaml');
-  const workListDest = resolve(cwd, 'specd_work_list.yaml');
-  if (!existsSync(workListDest)) {
-    try {
-      await copyFile(workListSrc, workListDest);
-      result.copied.push('specd_work_list.yaml');
-    } catch (err) {
-      result.errors.push(`Failed to copy specd_work_list.yaml: ${err}`);
-    }
-  }
-
-  const reviewSrc = resolve(TEMPLATES_DIR, 'specd_review.yaml');
-  const reviewDest = resolve(cwd, 'specd_review.yaml');
-  if (!existsSync(reviewDest)) {
-    try {
-      await copyFile(reviewSrc, reviewDest);
-      result.copied.push('specd_review.yaml');
-    } catch (err) {
-      result.errors.push(`Failed to copy specd_review.yaml: ${err}`);
-    }
-  }
-
-  // Update .gitignore
-  const gitignoreUpdated = await updateGitignore(cwd);
-  if (gitignoreUpdated) {
+  if (await updateGitignore(cwd)) {
     result.copied.push('.gitignore (updated)');
   }
 
@@ -437,26 +426,32 @@ export async function runSetup(ctx: {
     );
     result.copied.push('.pi-specd');
   } catch (err) {
-    result.errors.push(`Failed to write .pi-specd: ${err}`);
+    result.errors.push(`Failed to write .pi-specd: ${String(err)}`);
   }
 
   return result;
 }
 
-export async function ensureSpecdSetup(cwd: string): Promise<boolean> {
-  const agentsPath = resolve(cwd, 'AGENTS.md');
-  const specsDir = resolve(cwd, 'specs');
-  const specsReadme = resolve(specsDir, 'README.md');
+export const SETUP_REQUIRED_PATHS = ['AGENTS.md', 'PROJECT.md', 'specs/README.md'] as const;
 
-  return existsSync(agentsPath) && existsSync(specsDir) && existsSync(specsReadme);
+export async function ensureSpecdSetup(cwd: string): Promise<SetupCheckResult> {
+  const missing = SETUP_REQUIRED_PATHS.filter((p) => !existsSync(resolve(cwd, p)));
+  return missing.length === 0 ? { ok: true } : { ok: false, missing };
 }
 
 interface SpecdInfo {
   version: string;
-  setupAt: string;
 }
 
-export async function checkVersion(cwd: string): Promise<{ ok: boolean; message: string }> {
+// Only `version` is functionally required. The setup/migrate writers also persist a
+// `setupAt`/`migratedAt` timestamp for human inspection, but those keys are never
+// read — requiring them in the guard would break migrated projects, since
+// `migrate.ts` writes `migratedAt` and `setup.ts` writes `setupAt`.
+function isSpecdInfo(value: unknown): value is SpecdInfo {
+  return isRecord(value) && typeof value.version === 'string';
+}
+
+export async function checkVersion(cwd: string): Promise<VersionCheckResult> {
   const specdFilePath = resolve(cwd, '.pi-specd');
 
   if (!existsSync(specdFilePath)) {
@@ -468,16 +463,19 @@ export async function checkVersion(cwd: string): Promise<{ ok: boolean; message:
 
   try {
     const content = await readFile(specdFilePath, 'utf-8');
-    const info: SpecdInfo = JSON.parse(content);
+    const parsed: unknown = JSON.parse(content);
+    if (!isSpecdInfo(parsed)) {
+      return { ok: false, message: '⚠️  .pi-specd file is malformed.' };
+    }
 
-    if (info.version !== EXTENSION_VERSION) {
+    if (parsed.version !== EXTENSION_VERSION) {
       return {
         ok: false,
-        message: `⚠️  Extension version mismatch: project uses ${info.version}, extension is ${EXTENSION_VERSION}. Run /specd:setup to update.`,
+        message: `⚠️  Extension version mismatch: project uses ${parsed.version}, extension is ${EXTENSION_VERSION}. Run /specd:setup to update.`,
       };
     }
 
-    return { ok: true, message: '' };
+    return { ok: true };
   } catch {
     return {
       ok: false,

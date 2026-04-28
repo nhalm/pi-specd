@@ -1,12 +1,10 @@
 import { writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 
-import { runPiPrompt } from './pi-runner.js';
+import type { ExtensionCommandContext } from '@mariozechner/pi-coding-agent';
+
+import { runPiPrompt, type PiResult } from './pi-runner.js';
 import { EXTENSION_VERSION } from './version.js';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = fileURLToPath(resolve(import.meta.url, '..'));
 
 const MIGRATE_PROMPT = `---
 description: Migrate project from nhalm/specd format to specd-loop format
@@ -62,33 +60,18 @@ For each file that exists, make the following changes:
 - Only remove: version numbers, status rows, changelog sections
 - Don't change the structure of the specification sections
 - If a file doesn't exist, skip it
-
-## Output
-
-After making changes, output \`MIGRATION_COMPLETE: true\`
 `;
 
-export interface MigrateResult {
-  success: boolean;
-  output: string;
-}
-
-export async function runMigrate(
-  cwd: string,
-  ui?: { notify(msg: string, type: string): void },
-): Promise<MigrateResult> {
-  if (ui) {
-    ui.notify('🚀 Starting migration...', 'info');
-  }
+export async function runMigrate(ctx: ExtensionCommandContext): Promise<PiResult> {
+  const { cwd, ui } = ctx;
+  ui.notify('🚀 Starting migration...', 'info');
 
   // Run the migration in a subprocess
   const result = await runPiPrompt(cwd, MIGRATE_PROMPT, 'sonnet');
 
   if (!result.success) {
-    if (ui) {
-      ui.notify(`❌ Migration failed: ${result.output}`, 'error');
-    }
-    return { success: false, output: result.output };
+    ui.notify(`❌ Migration failed: ${result.output}`, 'error');
+    return result;
   }
 
   // Create .pi-specd after successful migration
@@ -99,14 +82,10 @@ export async function runMigrate(
       `${JSON.stringify({ version: EXTENSION_VERSION, migratedAt: new Date().toISOString() }, null, 2)}\n`,
       'utf-8',
     );
-    if (ui) {
-      ui.notify('✅ Migration complete. Created .pi-specd', 'info');
-    }
+    ui.notify('✅ Migration complete. Created .pi-specd', 'info');
   } catch (err) {
-    if (ui) {
-      ui.notify(`⚠️  Migration succeeded but failed to create .pi-specd: ${err}`, 'warn');
-    }
+    ui.notify(`⚠️  Migration succeeded but failed to create .pi-specd: ${String(err)}`, 'warning');
   }
 
-  return { success: true, output: result.output };
+  return result;
 }

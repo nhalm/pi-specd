@@ -6,29 +6,17 @@
 
 Specs define **WHAT to build**, not HOW. You describe behavior, contracts, and interfaces. The agent decides the implementation.
 
-**Status lifecycle:**
+**Work items** drive what gets implemented. They live in [specd_work_list.yaml](../specd_work_list.yaml) and are created during `/specd:plan`. Specs are edited in place — there is no draft/ready/implemented lifecycle.
 
-```
-Draft → Ready → Implemented
-  ↑              ↓ (regression found)
-  └──── Ready ←──┘
-```
+**Future items** marked with `(future)` in a spec are reference only. Do not implement.
 
-- **Draft** — Being specified. Agents ignore it.
-- **Ready** — Complete. Agents can implement and audit against it.
-- **Implemented** — Code matches spec.
-
-**Work items** live in [specd_work_list.yaml](../specd_work_list.yaml). During `/specd:plan`, work items are created alongside specs.
-
-**Future items** marked with `(future)` are reference only. Do not implement.
-
-**Dependencies** — Only implement features if their dependencies are Ready or Implemented.
+**Dependencies** — list them in the spec. Items in the work list use a `blocked: <reason>` field for inter-item ordering.
 
 ## Spec Index
 
-| Spec             | Status | Description |
-| ---------------- | ------ | ----------- |
-| _Add specs here_ |        |             |
+| Spec             | Description |
+| ---------------- | ----------- |
+| _Add specs here_ |             |
 
 ---
 
@@ -40,10 +28,6 @@ Each spec is a markdown file in this directory.
 
 ```markdown
 # Feature Name
-
-|        |       |
-| ------ | ----- |
-| Status | Draft |
 
 ## Overview
 
@@ -75,7 +59,8 @@ Detailed behavior, contracts, and interfaces. Must be complete enough for implem
 
 ## Notes
 
-Optional: open questions to resolve before moving to Ready.
+Optional: open questions to resolve before the spec is considered complete.
+```
 
 ## Writing Good Specs
 
@@ -91,4 +76,3 @@ Optional: open questions to resolve before moving to Ready.
 - Prescribe file names or function names
 - Specify implementation patterns
 - Include rationale or "why" explanations
-```
