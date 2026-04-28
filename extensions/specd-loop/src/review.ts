@@ -32,13 +32,15 @@ export async function loadReviewList(cwd: string): Promise<ReviewList> {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
       return EMPTY_REVIEW_LIST;
     }
-    throw new Error(`Failed to read ${REVIEW_FILE}: ${(err as Error).message}`);
+    throw new Error(`Failed to read ${REVIEW_FILE}: ${(err as Error).message}`, { cause: err });
   }
   let parsed: unknown;
   try {
     parsed = yaml.load(content);
   } catch (err) {
-    throw new Error(`Failed to parse ${REVIEW_FILE} as YAML: ${(err as Error).message}`);
+    throw new Error(`Failed to parse ${REVIEW_FILE} as YAML: ${(err as Error).message}`, {
+      cause: err,
+    });
   }
   return normalizeReviewList(parsed);
 }
