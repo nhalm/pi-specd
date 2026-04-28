@@ -16,9 +16,14 @@ jobs:
       # release-please opens / updates a "release PR" on every push to main.
       # When that release PR is merged, this same step detects the merge and
       # outputs `release_created: true`, which gates the publish steps below.
+      #
+      # We pass a fine-grained PAT instead of GITHUB_TOKEN so the release PR
+      # triggers `pull_request` workflows (notably `check`). PRs opened with
+      # GITHUB_TOKEN are blocked from triggering workflows by GitHub.
       - uses: googleapis/release-please-action@v5
         id: release
         with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
