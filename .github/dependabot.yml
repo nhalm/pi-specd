@@ -5,6 +5,12 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 10
+    # Production deps land as `fix(deps): ...` so release-please cuts a patch
+    # release; dev deps land as `chore(deps): ...` and stay out of releases.
+    commit-message:
+      prefix: fix
+      prefix-development: chore
+      include: scope
     groups:
       eslint:
         patterns:
