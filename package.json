@@ -32,6 +32,8 @@
     "@mariozechner/pi-coding-agent": "*"
   },
   "devDependencies": {
+    "@commitlint/cli": "^20.5.2",
+    "@commitlint/config-conventional": "^20.5.0",
     "@eslint/js": "^10.0.1",
     "@mariozechner/pi-coding-agent": "^0.70.5",
     "@types/js-yaml": "^4.0.9",

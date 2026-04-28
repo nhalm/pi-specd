@@ -16,7 +16,7 @@ jobs:
       # release-please opens / updates a "release PR" on every push to main.
       # When that release PR is merged, this same step detects the merge and
       # outputs `release_created: true`, which gates the publish steps below.
-      - uses: googleapis/release-please-action@v4
+      - uses: googleapis/release-please-action@v5
         id: release
         with:
           config-file: release-please-config.json
