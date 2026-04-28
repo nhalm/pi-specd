@@ -8,10 +8,16 @@ specd is a spec-driven development framework. You describe what to build, agents
 
 ## Quick Start
 
-Install:
+Install from npm:
 
 ```bash
-pi install github.com/nhalm/pi-specd
+pi install npm:@nhalm/pi-specd
+```
+
+Or install from GitHub:
+
+```bash
+pi install git:github.com/nhalm/pi-specd
 ```
 
 Initialize specd in your project:
