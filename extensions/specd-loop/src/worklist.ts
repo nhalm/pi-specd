@@ -17,13 +17,17 @@ export async function loadWorkList(cwd: string): Promise<WorkList> {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
       return { specs: [] };
     }
-    throw new Error(`Failed to read ${WORK_LIST_FILE}: ${(err as Error).message}`);
+    throw new Error(`Failed to read ${WORK_LIST_FILE}: ${(err as Error).message}`, {
+      cause: err,
+    });
   }
   let parsed: unknown;
   try {
     parsed = yaml.load(content);
   } catch (err) {
-    throw new Error(`Failed to parse ${WORK_LIST_FILE} as YAML: ${(err as Error).message}`);
+    throw new Error(`Failed to parse ${WORK_LIST_FILE} as YAML: ${(err as Error).message}`, {
+      cause: err,
+    });
   }
   return normalizeWorkList(parsed);
 }

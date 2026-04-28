@@ -32,12 +32,11 @@
     "@mariozechner/pi-coding-agent": "*"
   },
   "devDependencies": {
-    "@eslint/js": "^9.0.0",
+    "@eslint/js": "^10.0.1",
     "@mariozechner/pi-coding-agent": "^0.70.5",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^25.6.0",
-    "eslint": "^9.0.0",
-    "eslint-plugin-import": "^2.0.0",
+    "eslint": "^10.2.1",
     "lefthook": "^1.0.0",
     "prettier": "^3.0.0",
     "typescript": "^5.0.0",

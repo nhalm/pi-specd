@@ -1,5 +1,4 @@
 import js from '@eslint/js';
-import importPlugin from 'eslint-plugin-import';
 import tseslint from 'typescript-eslint';
 
 // eslint-disable-next-line @typescript-eslint/no-deprecated
@@ -8,9 +7,6 @@ export default tseslint.config(
   ...tseslint.configs.strictTypeChecked,
   ...tseslint.configs.stylisticTypeChecked,
   {
-    plugins: {
-      import: importPlugin,
-    },
     languageOptions: {
       parserOptions: {
         projectService: {
@@ -50,16 +46,6 @@ export default tseslint.config(
       'space-infix-ops': 'error',
       'keyword-spacing': ['error', { before: true, after: true }],
       'space-before-blocks': 'error',
-
-      // Imports
-      'import/order': [
-        'error',
-        {
-          groups: ['builtin', 'external', 'internal', 'parent', 'sibling', 'index'],
-          alphabetize: { order: 'asc' },
-          'newlines-between': 'always',
-        },
-      ],
     },
   },
   {
