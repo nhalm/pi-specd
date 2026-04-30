@@ -120,7 +120,9 @@ function handleEvent(event) {
       if (streamingAssistant && event.message?.role === 'assistant') {
         streamingAssistant.updateContent(event.message);
         for (const block of event.message.content ?? []) {
-          if (block.type === 'toolCall' && !pendingTools.has(block.id)) {
+          if (!block || block.type !== 'toolCall') continue;
+          if (typeof block.id !== 'string') continue;
+          if (!pendingTools.has(block.id)) {
             const tool = new ToolExecutionComponent(
               block.name,
               block.id,
@@ -132,7 +134,7 @@ function handleEvent(event) {
             );
             appendToChat(tool);
             pendingTools.set(block.id, tool);
-          } else if (block.type === 'toolCall') {
+          } else {
             pendingTools.get(block.id)?.updateArgs(block.arguments);
           }
         }
@@ -199,7 +201,10 @@ stream.on('data', (chunk) => {
     if (!line) continue;
     try {
       const parsed = JSON.parse(line);
-      if (parsed && parsed.type === 'specd:title' && typeof parsed.title === 'string') {
+      if (!parsed || typeof parsed !== 'object' || typeof parsed.type !== 'string') {
+        continue;
+      }
+      if (parsed.type === 'specd:title' && typeof parsed.title === 'string') {
         setTitle(parsed.title);
         continue;
       }
