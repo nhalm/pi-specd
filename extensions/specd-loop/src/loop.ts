@@ -126,17 +126,36 @@ function transcriptTail(output: string, lines = 6): string {
 }
 
 /**
+ * Outcome of one runPhase call. Carries enough information for the caller
+ * to react without reaching back into the underlying AgentRunResult shape.
+ *
+ *  - `success`: sub-agent finished cleanly.
+ *  - `aborted-skip`: user Ctrl+C'd, then said "continue with the loop". For
+ *    the cycle loop this means "skip this cycle and try the next item";
+ *    for non-cycle phases (review intake, audit) there's no follow-up to
+ *    skip to, so the caller treats this as "stop here, but it's not a
+ *    failure" — see the call sites for the per-phase interpretation.
+ *  - `aborted-stop`: user Ctrl+C'd and said "stop the whole loop".
+ *  - `error`: runner caught an exception mid-flight; output has the tail.
+ */
+type PhaseOutcome =
+  | { kind: 'success'; output: string }
+  | { kind: 'aborted-skip'; output: string }
+  | { kind: 'aborted-stop'; output: string }
+  | { kind: 'error'; output: string; error?: unknown };
+
+/**
  * Run a sub-agent and, if the user Ctrl+C's it, ask whether to keep going.
- * Returns "abort" if the user wants to stop the loop, "continue" otherwise
- * (including when the sub-agent finished normally).
+ * Translates the underlying AgentRunResult into a PhaseOutcome that bakes
+ * the user's continue-or-stop decision into the discriminator.
  */
 async function runPhase(
   ctx: ExtensionCommandContext,
   ctrlC: CtrlCWatcher,
   prompt: string,
-  opts: ReturnType<typeof subAgentOpts>,
+  opts: RunAgentOptions,
   phaseLabel: string,
-): Promise<{ status: 'ok' | 'abort'; result: Awaited<ReturnType<typeof runAgentSession>> }> {
+): Promise<PhaseOutcome> {
   const controller = new AbortController();
   const release = ctrlC.bind(controller);
   // try/finally so a Ctrl+C arriving between the `await` resolving and the
@@ -149,13 +168,22 @@ async function runPhase(
   } finally {
     release();
   }
-  if (result.kind !== 'aborted') return { status: 'ok', result };
-  // User Ctrl+C'd this phase. Ask whether to keep going.
-  const cont = await ctx.ui.confirm(
-    'Aborted',
-    `${phaseLabel} was interrupted with Ctrl+C. Continue with the loop?`,
-  );
-  return { status: cont ? 'ok' : 'abort', result };
+  switch (result.kind) {
+    case 'success':
+      return { kind: 'success', output: result.output };
+    case 'error':
+      return { kind: 'error', output: result.output, error: result.error };
+    case 'aborted': {
+      // User Ctrl+C'd this phase. Ask whether to keep going.
+      const cont = await ctx.ui.confirm(
+        'Aborted',
+        `${phaseLabel} was interrupted with Ctrl+C. Continue with the loop?`,
+      );
+      return cont
+        ? { kind: 'aborted-skip', output: result.output }
+        : { kind: 'aborted-stop', output: result.output };
+    }
+  }
 }
 
 /**
@@ -226,24 +254,26 @@ async function runLoopBody(
     'Review intake',
   );
   clearActivityWidget(viewer, ctx, isViewerClosed);
-  if (intakePhase.status === 'abort') {
+  if (intakePhase.kind === 'aborted-stop') {
     clearWidget(ctx);
     sendProgress(pi, 'complete', 'Loop aborted by user.');
     return true;
   }
-  const reviewResult = intakePhase.result;
-  if (reviewResult.kind === 'error') {
-    const intakeLogPath = await logOutput('review-intake', reviewResult.output);
+  if (intakePhase.kind === 'error') {
+    const intakeLogPath = await logOutput('review-intake', intakePhase.output);
     clearWidget(ctx);
     sendProgress(
       pi,
       'error',
-      `Review intake failed. Full transcript: ${intakeLogPath}${transcriptTail(reviewResult.output)}`,
+      `Review intake failed. Full transcript: ${intakeLogPath}${transcriptTail(intakePhase.output)}`,
     );
     return false;
   }
+  // For review-intake there's no "next item" to skip to, so 'aborted-skip'
+  // and 'success' both mean "fall through to the post-intake checks". The
+  // skip case just produces an empty/short transcript.
 
-  await logOutput('review-intake', reviewResult.output);
+  await logOutput('review-intake', intakePhase.output);
 
   // If the user still has undecided findings (or new ones surfaced during intake), pause.
   const reviewListAfterIntake = await loadReviewList(cwd);
@@ -307,26 +337,28 @@ async function runLoopBody(
       `Cycle ${cycle}/${options.maxCycles}`,
     );
     clearActivityWidget(viewer, ctx, isViewerClosed);
-    const implResult = implPhase.result;
-    const cycleLogPath = await logOutput(`implement-cycle-${cycle}`, implResult.output);
+    const cycleLogPath = await logOutput(`implement-cycle-${cycle}`, implPhase.output);
 
-    if (implPhase.status === 'abort') {
+    if (implPhase.kind === 'aborted-stop') {
       clearWidget(ctx);
       sendProgress(pi, 'complete', `Loop aborted by user during cycle ${cycle}.`);
       return true;
     }
     // User Ctrl+C'd this cycle but chose to keep going. Skip post-checks (no
     // commit landed) and let the next loop iteration pick up another item.
-    if (implResult.kind === 'aborted') {
+    // This is the only call site where 'aborted-skip' literally means "skip
+    // and try the next iteration"; review-intake and audit treat it as
+    // "fall through" because they have no next iteration to skip to.
+    if (implPhase.kind === 'aborted-skip') {
       sendProgress(pi, 'info', `Cycle ${cycle} skipped. Picking up the next item.`);
       continue;
     }
-    if (implResult.kind === 'error') {
+    if (implPhase.kind === 'error') {
       clearWidget(ctx);
       sendProgress(
         pi,
         'error',
-        `Cycle ${cycle} failed before completion. Full transcript: ${cycleLogPath}${transcriptTail(implResult.output)}`,
+        `Cycle ${cycle} failed before completion. Full transcript: ${cycleLogPath}${transcriptTail(implPhase.output)}`,
       );
       return false;
     }
@@ -437,31 +469,31 @@ async function runLoopBody(
     'Audit',
   );
   clearActivityWidget(viewer, ctx, isViewerClosed);
-  if (auditPhase.status === 'abort') {
+  if (auditPhase.kind === 'aborted-stop') {
     clearWidget(ctx);
     sendProgress(pi, 'complete', 'Loop aborted by user during audit.');
     return true;
   }
-  const auditResult = auditPhase.result;
   // Audit was Ctrl+C'd but user said keep going. There's nothing after audit,
-  // so just exit gracefully without treating it as a failure.
-  if (auditResult.kind === 'aborted') {
+  // so 'aborted-skip' has no next iteration to skip to — treat it as "audit
+  // was effectively cancelled" and exit gracefully without surfacing a failure.
+  if (auditPhase.kind === 'aborted-skip') {
     clearWidget(ctx);
     sendProgress(pi, 'complete', 'Loop done. Audit skipped via Ctrl+C.');
     return false;
   }
-  if (auditResult.kind === 'error') {
-    const failedAuditLog = await logOutput('audit', auditResult.output);
+  if (auditPhase.kind === 'error') {
+    const failedAuditLog = await logOutput('audit', auditPhase.output);
     clearWidget(ctx);
     sendProgress(
       pi,
       'error',
-      `Audit failed before completion. Full transcript: ${failedAuditLog}${transcriptTail(auditResult.output)}`,
+      `Audit failed before completion. Full transcript: ${failedAuditLog}${transcriptTail(auditPhase.output)}`,
     );
     return false;
   }
 
-  await logOutput('audit', auditResult.output);
+  await logOutput('audit', auditPhase.output);
 
   // If audit raised review items, pause for the user.
   const reviewList = await loadReviewList(cwd);
