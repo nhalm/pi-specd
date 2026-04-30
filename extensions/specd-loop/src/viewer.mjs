@@ -145,6 +145,14 @@ function handleEvent(event) {
       if (event.message?.role === 'assistant') {
         streamingAssistant?.updateContent(event.message);
         streamingAssistant = null;
+        // Match pi's interactive mode: once the assistant message ends, every
+        // pending tool's args are final. setArgsComplete() triggers diff
+        // computation for edit-style tools so their args render as a diff
+        // instead of raw partial text. Don't clear the map — tool_execution_end
+        // still owns that.
+        for (const component of pendingTools.values()) {
+          component.setArgsComplete();
+        }
       }
       break;
 
