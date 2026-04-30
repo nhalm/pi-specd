@@ -1,7 +1,9 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { createReadStream, openSync, writeSync, closeSync, unlinkSync } from 'node:fs';
+import { createReadStream, writeSync, unlinkSync, constants as fsConstants } from 'node:fs';
+import { open as fsOpen, type FileHandle } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
 import type { AgentSessionEvent } from '@mariozechner/pi-coding-agent';
@@ -37,7 +39,7 @@ export interface ViewerHandle {
 }
 
 interface ActiveViewer {
-  fd: number;
+  handle: FileHandle;
   fifo: string;
   reverseFifo: string;
   paneId: string;
@@ -51,9 +53,15 @@ function noop() {
   // intentionally empty
 }
 
+// Idempotent: tolerates being called multiple times (e.g. from the explicit
+// close() path and again from the process-exit handler). Each step is wrapped
+// in its own try/catch so a no-op on one resource doesn't skip the rest, and
+// FileHandle.close() rejects with EBADF on a second call which we swallow.
 function cleanupOne(v: ActiveViewer) {
   try {
-    closeSync(v.fd);
+    void v.handle.close().catch(() => {
+      // already closed / handle invalidated
+    });
   } catch {
     // already closed
   }
@@ -68,7 +76,11 @@ function cleanupOne(v: ActiveViewer) {
     // already gone
   }
   if (v.killOnClose && v.paneId) {
-    spawnSync('tmux', ['kill-pane', '-t', v.paneId]);
+    try {
+      spawnSync('tmux', ['kill-pane', '-t', v.paneId]);
+    } catch {
+      // pane already gone or tmux unavailable
+    }
   }
 }
 
@@ -165,9 +177,78 @@ export async function spawnViewerPane(opts?: {
   }
   paneId = paneId.trim();
 
-  // Open the forward FIFO for writing. Blocks until the viewer opens it for read.
-  const fd = openSync(fifo, 'w');
-  const handle: ActiveViewer = { fd, fifo, reverseFifo, paneId, killOnClose };
+  // Open the forward FIFO for writing without blocking. A non-blocking
+  // write-side open of a FIFO whose reader hasn't connected yet returns ENXIO,
+  // so we poll with a small backoff until the viewer opens its read end. If
+  // viewer.mjs crashes during init (theme load, pi-tui import, terminal-size
+  // weirdness) the read end never opens — without a timeout the parent would
+  // hang forever, so we cap the wait and fall back to widget mode (null).
+  //
+  // Two-step open: first an O_NONBLOCK probe to detect the reader (or time
+  // out), then a normal blocking re-open so subsequent writeSync calls retain
+  // their original blocking semantics (the alternative would be EAGAIN errors
+  // whenever the FIFO buffer briefly backs up).
+  const openDeadlineMs = 3000;
+  const openPollMs = 50;
+  const startedAt = Date.now();
+  let probeHandle: FileHandle | null = null;
+  let openFatal = false;
+  while (Date.now() - startedAt < openDeadlineMs) {
+    try {
+      probeHandle = await fsOpen(fifo, fsConstants.O_WRONLY | fsConstants.O_NONBLOCK);
+      break;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'ENXIO') {
+        await delay(openPollMs);
+        continue;
+      }
+      // Any other error is fatal — can't recover.
+      openFatal = true;
+      break;
+    }
+  }
+  let fileHandle: FileHandle | null = null;
+  if (probeHandle && !openFatal) {
+    // Reader is now attached. Close the non-blocking probe and reopen with
+    // standard blocking write semantics so writeSync behaves as before.
+    try {
+      await probeHandle.close();
+    } catch {
+      // ignore
+    }
+    try {
+      fileHandle = await fsOpen(fifo, 'w');
+    } catch {
+      fileHandle = null;
+    }
+  }
+  if (!fileHandle) {
+    // Viewer never connected (or the second open raced with a viewer crash).
+    // Kill the pane (if any) and clean up the FIFOs; the caller will see null
+    // and fall back to the widget progress display.
+    if (paneId) {
+      try {
+        spawnSync('tmux', ['kill-pane', '-t', paneId]);
+      } catch {
+        // pane already gone
+      }
+    }
+    try {
+      unlinkSync(fifo);
+    } catch {
+      // best-effort
+    }
+    try {
+      unlinkSync(reverseFifo);
+    } catch {
+      // best-effort
+    }
+    return null;
+  }
+
+  const fd = fileHandle.fd;
+  const handle: ActiveViewer = { handle: fileHandle, fifo, reverseFifo, paneId, killOnClose };
   active.add(handle);
   ensureExitHandlers();
 
@@ -178,7 +259,9 @@ export async function spawnViewerPane(opts?: {
   const fireClose = () => {
     if (viewerClosed) return;
     viewerClosed = true;
-    for (const h of closeHandlers) {
+    // Snapshot so a handler that unsubscribes itself (or registers a new one)
+    // doesn't perturb the in-flight iteration.
+    for (const h of [...closeHandlers]) {
       try {
         h();
       } catch {
@@ -186,10 +269,14 @@ export async function spawnViewerPane(opts?: {
       }
     }
   };
-  const reverseStream = createReadStream(reverseFifo);
+  // Decode as UTF-8 here so multi-byte sequences split across chunk
+  // boundaries are reassembled by Node's StringDecoder rather than corrupted
+  // by per-chunk Buffer.toString() calls (which would yield invalid JSON the
+  // catch below silently dropped).
+  const reverseStream = createReadStream(reverseFifo, { encoding: 'utf-8' });
   let inputBuffer = '';
-  reverseStream.on('data', (chunk) => {
-    inputBuffer += chunk.toString();
+  reverseStream.on('data', (chunk: string) => {
+    inputBuffer += chunk;
     let nl: number;
     while ((nl = inputBuffer.indexOf('\n')) !== -1) {
       const line = inputBuffer.slice(0, nl);
@@ -203,7 +290,9 @@ export async function spawnViewerPane(opts?: {
       } catch {
         continue;
       }
-      for (const h of inputHandlers) h(text);
+      // Snapshot so a handler that unsubscribes itself doesn't perturb the
+      // iteration mid-flight.
+      for (const h of [...inputHandlers]) h(text);
     }
   });
   reverseStream.on('end', fireClose);
@@ -241,8 +330,16 @@ export async function spawnViewerPane(opts?: {
     },
     onClose: (handler) => {
       if (viewerClosed) {
-        // Already closed — fire immediately on next tick.
-        queueMicrotask(handler);
+        // Already closed — fire immediately on next tick. Wrap in try/catch
+        // so a throwing handler doesn't surface as an unhandled rejection in
+        // the microtask queue (matches the in-flight fireClose contract).
+        queueMicrotask(() => {
+          try {
+            handler();
+          } catch {
+            // ignore handler errors
+          }
+        });
         // No-op unsubscribe: the close already fired, nothing to detach.
         return noop;
       }
