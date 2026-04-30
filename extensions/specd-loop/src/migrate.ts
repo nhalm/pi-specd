@@ -135,7 +135,12 @@ export async function runMigrate(
     );
   });
   const ctrlC = abortOnCtrlC(ctx);
-  let result: AgentRunResult;
+  // Default to a synthetic 'aborted' so the finally block has a defined
+  // value even if runOneShot throws before returning. In that case the
+  // exception still propagates past the finally; the only effect of this
+  // default is that the viewer pane gets killed (via the aborted branch
+  // below) instead of leaving an orphaned pane on the screen.
+  let result: AgentRunResult = { kind: 'aborted', output: '' };
   try {
     result = await runOneShot(ctx, {
       prompt: MIGRATE_PROMPT,
@@ -147,10 +152,23 @@ export async function runMigrate(
   } finally {
     ctrlC.unsubscribe();
     releaseClose?.();
-    // Once the migration is done (or aborted), the side pane is gone — the
-    // parent agent will deliver any news from here on. runOneShot already
-    // clears the activity widget in widget-mode runs.
-    if (viewer) await viewer.close({ kill: true });
+    // Aborts kill the pane immediately — the user explicitly walked away.
+    // Successful or errored migrations send a 'specd:done' control frame so
+    // the side pane shows a completion banner and stays up; the user
+    // dismisses it manually. runOneShot already clears the activity widget
+    // in widget-mode runs, and the parent chat carries the rich detail in
+    // either mode.
+    if (viewer) {
+      if (result.kind === 'aborted') {
+        await viewer.close({ kill: true });
+      } else if (result.kind === 'success') {
+        viewer.setDone('migration complete');
+        await viewer.close({ kill: false });
+      } else {
+        viewer.setDone('migration failed — check chat for details');
+        await viewer.close({ kill: false });
+      }
+    }
   }
 
   if (result.kind === 'aborted') {

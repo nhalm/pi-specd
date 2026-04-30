@@ -70,7 +70,8 @@ export type ActivityFrame =
   | { kind: 'note'; level: 'info' | 'warning' | 'error'; text: string }
   | { kind: 'agent-end' }
   | { kind: 'banner'; title: string }
-  | { kind: 'control'; subtype: 'specd:title'; title: string };
+  | { kind: 'control'; subtype: 'specd:title'; title: string }
+  | { kind: 'control'; subtype: 'specd:done'; summary?: string };
 
 /**
  * Mutable context threaded through `eventToFrames` so we can recover state

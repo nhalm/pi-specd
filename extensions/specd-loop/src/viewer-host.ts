@@ -18,6 +18,12 @@ export interface ViewerHandle {
    */
   setTitle: (title: string) => void;
   /**
+   * Mark the run as finished. Sends a 'specd:done' control frame so the
+   * viewer can render a completion footer. The pane stays open until the
+   * user closes it or the FIFO timeout fires (whichever comes first).
+   */
+  setDone: (summary?: string) => void;
+  /**
    * Subscribe to user input typed into the viewer pane. Each call returns
    * an unsubscribe function. Multiple subscribers are supported but each
    * input is delivered to all of them.
@@ -31,9 +37,11 @@ export interface ViewerHandle {
   onClose: (handler: () => void) => () => void;
   /**
    * Close both FIFOs. By default the viewer pane is left alive (it'll
-   * auto-exit ~30s after seeing FIFO EOF). Pass `{ kill: true }` to kill the
-   * pane immediately — useful when the user explicitly aborted and doesn't
-   * want the partial output lingering.
+   * auto-exit ~5min after seeing FIFO EOF as a crash safety-net; on a clean
+   * run the parent calls `setDone` first and the user dismisses the pane
+   * manually). Pass `{ kill: true }` to kill the pane immediately — useful
+   * when the user explicitly aborted and doesn't want the partial output
+   * lingering.
    */
   close: (opts?: { kill?: boolean }) => Promise<void>;
 }
@@ -126,7 +134,9 @@ export async function spawnViewerPane(opts?: {
   // (1) the agent's final events may still be draining when the parent closes
   //     its end of the FIFO, and an immediate kill-pane drops them mid-render;
   // (2) it lets the user actually read the final state.
-  // The viewer auto-exits ~30s after seeing FIFO EOF, so there's no leak.
+  // On clean exit the parent sends `specd:done` and the user dismisses the
+  // pane manually. The viewer also auto-exits ~5min after seeing FIFO EOF as
+  // a crash safety-net, so an orphaned pane can't linger forever.
   const killOnClose = opts?.killOnClose ?? false;
   const stamp = `${process.pid}-${Date.now()}`;
   const fifo = join(tmpdir(), `specd-viewer-${stamp}.fifo`);
@@ -323,6 +333,9 @@ export async function spawnViewerPane(opts?: {
     },
     setTitle: (title) => {
       writeLine({ kind: 'control', subtype: 'specd:title', title });
+    },
+    setDone: (summary) => {
+      writeLine({ kind: 'control', subtype: 'specd:done', summary });
     },
     onInput: (handler) => {
       inputHandlers.add(handler);

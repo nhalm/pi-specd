@@ -56,6 +56,27 @@ function setTitle(text) {
   tui.requestRender();
 }
 
+// Once the parent sends a 'specd:done' control frame, render a completion
+// banner inside the chat container and stop any pending FIFO-EOF auto-exit
+// timer so the user has unbounded time to read the final state. The user
+// dismisses the pane manually (close-pane keystroke / tmux kill-pane).
+//
+// `exitTimer` is the FIFO-EOF crash-safety fallback (see `stream.on('end')`
+// at the bottom of the file); declared up here so showDoneBanner can clear it.
+let doneBannerShown = false;
+let exitTimer = null;
+function showDoneBanner(summary) {
+  if (doneBannerShown) return;
+  doneBannerShown = true;
+  const headline = summary && summary.length > 0 ? summary : 'complete';
+  appendToChat(new Text(`\n══ ${headline} ══\nClose the pane to dismiss.`));
+  if (exitTimer !== null) {
+    clearTimeout(exitTimer);
+    exitTimer = null;
+  }
+  tui.requestRender();
+}
+
 // Input box pinned to the bottom of the pane via an overlay (so it stays
 // visible no matter how much the chat above scrolls).
 const inputBox = new Input();
@@ -225,6 +246,8 @@ function handleFrame(frame) {
     case 'control':
       if (frame.subtype === 'specd:title' && typeof frame.title === 'string') {
         setTitle(frame.title);
+      } else if (frame.subtype === 'specd:done') {
+        showDoneBanner(typeof frame.summary === 'string' ? frame.summary : undefined);
       }
       break;
 
@@ -261,15 +284,28 @@ stream.on('data', (chunk) => {
   }
 });
 
+// Crash-safety fallback. On a clean run the parent sends a 'specd:done'
+// frame, which clears this timer and waits for the user to dismiss the pane
+// manually. If the parent crashes before sending 'specd:done', the FIFO EOF
+// fires here and the viewer self-exits after a long delay so an orphaned
+// pane doesn't linger forever. 5 minutes is generous enough that a
+// normally-completed run with the user reading the pane never auto-closes
+// (specd:done would have already cancelled the timer in that case).
+const FIFO_EOF_FALLBACK_MS = 5 * 60 * 1000;
 stream.on('end', () => {
   tui.requestRender(true);
-  setTimeout(() => {
+  if (doneBannerShown) {
+    // User has the done banner visible; don't auto-exit. They'll close the
+    // pane themselves when they're ready.
+    return;
+  }
+  exitTimer = setTimeout(() => {
     // Restore the terminal (cursor, alt-screen, raw mode) before exiting so
     // the surrounding shell isn't left in a weird state — important when the
     // pane is killed mid-run.
     tui.stop();
     process.exit(0);
-  }, 30_000);
+  }, FIFO_EOF_FALLBACK_MS);
 });
 
 stream.on('error', (err) => {

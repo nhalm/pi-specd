@@ -86,8 +86,11 @@ export async function runLoop(
   });
 
   let userAborted = false;
+  let viewerSummary: string | undefined;
   try {
-    userAborted = await runLoopBody(pi, ctx, options, viewer, ctrlC, () => viewerClosed);
+    const outcome = await runLoopBody(pi, ctx, options, viewer, ctrlC, () => viewerClosed);
+    userAborted = outcome.userAborted;
+    viewerSummary = outcome.viewerSummary;
   } catch (err) {
     clearWidget(ctx);
     const msg = err instanceof Error ? err.message : String(err);
@@ -100,15 +103,24 @@ export async function runLoop(
     } else {
       sendProgress(pi, 'error', `Loop halted: ${msg}`);
     }
+    viewerSummary = 'loop halted — check chat for details';
   } finally {
     // Each phase releases its own controller; no global setController(null)
     // needed here. Just detach the terminal-input listener so further Ctrl+C
     // keystrokes don't fire stale aborts.
     ctrlC.unsubscribe();
     releaseClose?.();
-    // Kill the pane immediately if the user aborted; otherwise leave it open
-    // so they can scroll back through the run.
-    if (viewer) await viewer.close({ kill: userAborted });
+    // Aborts kill the pane immediately. Clean exits (success or recoverable
+    // error) send a 'specd:done' control frame so the viewer renders its
+    // completion banner, then leave the pane up for the user to dismiss.
+    if (viewer) {
+      if (userAborted) {
+        await viewer.close({ kill: true });
+      } else {
+        viewer.setDone(viewerSummary ?? 'loop complete');
+        await viewer.close({ kill: false });
+      }
+    }
   }
 }
 
@@ -212,6 +224,19 @@ const auditPhase: Phase = {
   logSlug: 'audit',
 };
 
+/**
+ * Outcome of a full loop run, threaded back to runLoop's `finally`:
+ *  - `userAborted` controls whether the side pane is killed immediately
+ *    (true) or marked done and left up for the user (false).
+ *  - `viewerSummary` is a one-liner for the side-pane done banner. The
+ *    parent chat already gets the rich progress messages via sendProgress;
+ *    this is just the "what happened" footer in the side pane.
+ */
+interface LoopBodyOutcome {
+  userAborted: boolean;
+  viewerSummary?: string;
+}
+
 async function runLoopBody(
   pi: ExtensionAPI,
   ctx: ExtensionCommandContext,
@@ -219,7 +244,7 @@ async function runLoopBody(
   viewer: ViewerHandle | null,
   ctrlC: CtrlCWatcher,
   isViewerClosed: () => boolean,
-): Promise<boolean> {
+): Promise<LoopBodyOutcome> {
   const cwd = ctx.cwd;
   const state: RunState = { viewer, isViewerClosed, ctrlC };
 
@@ -230,7 +255,7 @@ async function runLoopBody(
   if (intakeOutcome.kind === 'aborted-stop') {
     clearWidget(ctx);
     sendProgress(pi, 'complete', 'Loop aborted by user.');
-    return true;
+    return { userAborted: true };
   }
   if (intakeOutcome.kind === 'error') {
     const intakeLogPath = await logOutput(intakePhase.logSlug, intakeOutcome.output);
@@ -240,7 +265,7 @@ async function runLoopBody(
       'error',
       `Review intake failed. Full transcript: ${intakeLogPath}${transcriptTail(intakeOutcome.output)}`,
     );
-    return false;
+    return { userAborted: false, viewerSummary: 'review intake failed — check chat for details' };
   }
   // For review-intake there's no "next item" to skip to, so 'aborted-skip'
   // and 'success' both mean "fall through to the post-intake checks". The
@@ -254,7 +279,10 @@ async function runLoopBody(
     surfaceReviewItems(pi, cwd, getUndecided(reviewListAfterIntake.findings));
     clearWidget(ctx);
     sendProgress(pi, 'complete', 'Decide the items above, then re-run /specd:loop.');
-    return false;
+    return {
+      userAborted: false,
+      viewerSummary: 'review items pending — decide them in chat, then re-run',
+    };
   }
 
   sendProgress(pi, 'info', 'Review intake complete.');
@@ -285,7 +313,7 @@ async function runLoopBody(
         'error',
         'Cannot verify commits: this directory is not a git repository (or git is unavailable). Run `git init` and try again.',
       );
-      return false;
+      return { userAborted: false, viewerSummary: 'not a git repository — check chat for details' };
     }
 
     const remainingBefore = getUnblockedItems(workList).length;
@@ -303,7 +331,7 @@ async function runLoopBody(
     if (cycleOutcome.kind === 'aborted-stop') {
       clearWidget(ctx);
       sendProgress(pi, 'complete', `Loop aborted by user during cycle ${cycle}.`);
-      return true;
+      return { userAborted: true };
     }
     // User Ctrl+C'd this cycle but chose to keep going. Skip post-checks (no
     // commit landed) and let the next loop iteration pick up another item.
@@ -321,7 +349,10 @@ async function runLoopBody(
         'error',
         `Cycle ${cycle} failed before completion. Full transcript: ${cycleLogPath}${transcriptTail(cycleOutcome.output)}`,
       );
-      return false;
+      return {
+        userAborted: false,
+        viewerSummary: `cycle ${cycle} failed — check chat for details`,
+      };
     }
 
     // Post-checks: did the agent surface ambiguity? did it commit?
@@ -346,7 +377,10 @@ async function runLoopBody(
       surfaceReviewItems(pi, cwd, getUndecided(reviewAfter.findings));
       clearWidget(ctx);
       sendProgress(pi, 'complete', 'Decide the items above, then re-run /specd:loop.');
-      return false;
+      return {
+        userAborted: false,
+        viewerSummary: 'new review items surfaced — decide them in chat, then re-run',
+      };
     }
 
     if (outcome.kind === 'no-commit' || outcome.kind === 'amend-only') {
@@ -367,7 +401,10 @@ async function runLoopBody(
           'Re-running /specd:loop will pick this same item up again.',
         ].join('\n'),
       );
-      return false;
+      return {
+        userAborted: false,
+        viewerSummary: `cycle ${cycle} ended without forward progress — check chat for details`,
+      };
     }
 
     // Mark complete and persist.
@@ -379,7 +416,10 @@ async function runLoopBody(
         'error',
         `Couldn't re-locate item [${item.spec}] ${item.description} in the work list. Was specd_work_list.yaml edited mid-loop? Inspect the file and re-run /specd:loop.`,
       );
-      return false;
+      return {
+        userAborted: false,
+        viewerSummary: 'work list mismatch — check chat for details',
+      };
     }
     await saveWorkList(cwd, fresh);
     totalProcessed++;
@@ -408,7 +448,10 @@ async function runLoopBody(
         'error',
         `Max cycles (${options.maxCycles}) reached with ${remaining} ready item(s) still pending. Re-run /specd:loop to continue, or pass --max-cycles=N to raise the limit.`,
       );
-      return false;
+      return {
+        userAborted: false,
+        viewerSummary: `max cycles reached — ${remaining} item(s) still pending`,
+      };
     }
   }
 
@@ -416,7 +459,10 @@ async function runLoopBody(
   if (options.skipAudit) {
     showWidget(ctx, 'Complete', cycle, options.maxCycles, 0, 'Audit skipped');
     sendProgress(pi, 'complete', `Loop done. Processed ${totalProcessed} item(s). Audit skipped.`);
-    return false;
+    return {
+      userAborted: false,
+      viewerSummary: `loop complete — processed ${totalProcessed} item(s), audit skipped`,
+    };
   }
 
   showWidget(ctx, 'Audit', cycle, options.maxCycles, 0, 'Running...');
@@ -425,7 +471,7 @@ async function runLoopBody(
   if (auditOutcome.kind === 'aborted-stop') {
     clearWidget(ctx);
     sendProgress(pi, 'complete', 'Loop aborted by user during audit.');
-    return true;
+    return { userAborted: true };
   }
   // Audit was Ctrl+C'd but user said keep going. There's nothing after audit,
   // so 'aborted-skip' has no next iteration to skip to — treat it as "audit
@@ -433,7 +479,10 @@ async function runLoopBody(
   if (auditOutcome.kind === 'aborted-skip') {
     clearWidget(ctx);
     sendProgress(pi, 'complete', 'Loop done. Audit skipped via Ctrl+C.');
-    return false;
+    return {
+      userAborted: false,
+      viewerSummary: `loop complete — processed ${totalProcessed} item(s), audit skipped via Ctrl+C`,
+    };
   }
   if (auditOutcome.kind === 'error') {
     const failedAuditLog = await logOutput(auditPhase.logSlug, auditOutcome.output);
@@ -443,7 +492,7 @@ async function runLoopBody(
       'error',
       `Audit failed before completion. Full transcript: ${failedAuditLog}${transcriptTail(auditOutcome.output)}`,
     );
-    return false;
+    return { userAborted: false, viewerSummary: 'audit failed — check chat for details' };
   }
 
   await logOutput(auditPhase.logSlug, auditOutcome.output);
@@ -456,7 +505,10 @@ async function runLoopBody(
     surfaceReviewItems(pi, cwd, undecided);
     clearWidget(ctx);
     sendProgress(pi, 'complete', 'Decide the items above, then re-run /specd:loop.');
-    return false;
+    return {
+      userAborted: false,
+      viewerSummary: 'audit raised review items — decide them in chat, then re-run',
+    };
   }
 
   // Prune specs whose work is fully done — they shouldn't be re-audited next loop.
@@ -473,5 +525,8 @@ async function runLoopBody(
     'complete',
     `Loop complete. Processed ${totalProcessed} item(s). Audit clean.${prunedSuffix}`,
   );
-  return false;
+  return {
+    userAborted: false,
+    viewerSummary: `loop complete — processed ${totalProcessed} item(s), audit clean`,
+  };
 }
