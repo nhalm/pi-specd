@@ -102,8 +102,18 @@ const pendingTools = new Map();
 let streamingAssistant = null;
 
 // Input is now an overlay (not part of chatContainer), so we can just append.
+// Cap stored children so a long-running session doesn't grow the chatContainer
+// unboundedly (Container has no built-in eviction). The leading Spacer (added
+// once at startup) is preserved so the title-overlay padding never disappears.
+const MAX_CHAT_CHILDREN = 200;
 function appendToChat(component) {
   chatContainer.addChild(component);
+  // children[0] is the leading Spacer; evict the next-oldest entry first.
+  while (chatContainer.children.length > MAX_CHAT_CHILDREN + 1) {
+    const drop = chatContainer.children[1];
+    if (!drop) break;
+    chatContainer.removeChild(drop);
+  }
 }
 
 function handleEvent(event) {
