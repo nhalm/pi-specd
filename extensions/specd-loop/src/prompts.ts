@@ -92,16 +92,20 @@ You have been assigned exactly one work item. Do not pick a different item, do n
 1. Read \`specs/${item.spec}.md\`. The spec is the source of truth, not the existing code.
 2. Implement ONLY the work item described above.
 3. Validate: run tests, run lint/format, fix anything you broke.
-4. Commit. The commit message MUST follow [Conventional Commits](https://www.conventionalcommits.org/):
+4. Commit. The repo's commit-msg hook runs commitlint with \`@commitlint/config-conventional\`, which enforces:
 
    \`\`\`
    <type>(<optional scope>): <subject>
 
    <optional body>
+
+   <optional footer>
    \`\`\`
 
-   - \`type\` ∈ { feat, fix, chore, refactor, docs, test, perf, ci, build, style }
-   - Subject: imperative mood, lowercase, no trailing period, under 72 chars.
+   - \`type\` (required, lowercase) ∈ { build, chore, ci, docs, feat, fix, perf, refactor, revert, style, test }
+   - Subject: required, no trailing period, NOT in sentence-case / start-case / pascal-case / upper-case (lowercase / kebab is fine).
+   - Header (\`<type>(<scope>): <subject>\`) ≤ 100 chars.
+   - Body and footer lines ≤ 100 chars; blank line between header/body and body/footer.
    - Example: \`feat(auth): add POST /auth/register endpoint\`
 
    If a pre-commit or commit-msg hook fails, **fix the underlying issue and recommit** — do not bypass with \`--no-verify\`.
@@ -162,7 +166,8 @@ Each work item must be:
 After processing all decided findings:
 - Remove findings whose decision has been fully acted on (or that resolved to "no action").
 - Keep findings without decisions and findings you marked \`clarification_needed:\`.
-- Commit any spec changes plus the updated YAML files in one commit using Conventional Commits format (e.g. \`chore(specd): process review decisions\`).
+- \`specd_work_list.yaml\` and \`specd_review.yaml\` are local-only state (gitignored) — do not stage or commit them.
+- If you edited any spec files, commit those edits in a single commit using the Conventional Commits format the repo enforces (commitlint config-conventional, e.g. \`chore(specd): process review decisions\`). If you did not edit any spec files, do not create a commit.
 `;
 
 export const AUDIT_PROMPT = `---
@@ -224,7 +229,7 @@ Write confirmed findings to the appropriate file.
 
 ## Commit
 
-Commit any spec edits, work-list changes, or review-list additions in one commit using Conventional Commits format (e.g. \`chore(specd): record audit findings\`).
+\`specd_work_list.yaml\` and \`specd_review.yaml\` are local-only state (gitignored) — do not stage or commit them. If you edited any spec files, commit those edits in a single commit using the Conventional Commits format the repo enforces (commitlint config-conventional, e.g. \`chore(specd): record audit findings\`). If you did not edit any spec files, do not create a commit.
 
 ## Output
 
