@@ -34,13 +34,6 @@ export interface RunAgentOptions {
    * the session ends — caller uses it to detach any input subscription.
    */
   attachInput?: (steer: (text: string) => void) => () => void;
-  /**
-   * If provided, the runner stays alive after the initial prompt resolves and
-   * keeps accepting follow-up prompts via `attachInput` until this promise
-   * resolves. Lets the user have a continuing conversation with the sub-agent
-   * (e.g. answer a clarifying question the agent asked at the end of the run).
-   */
-  stayAliveUntil?: Promise<void>;
 }
 
 const MAX_ENTRIES = 6;
@@ -62,7 +55,20 @@ export async function runAgentSession(
   prompt: string,
   options: RunAgentOptions = {},
 ): Promise<AgentRunResult> {
-  const { onLogUpdate, onEvent, signal, attachInput, stayAliveUntil } = options;
+  const { onLogUpdate, onEvent, signal, attachInput } = options;
+
+  // All local state declared up front so any callback wired below (debug
+  // loggers, abort handlers, process listeners) can reference these without
+  // tripping a temporal-dead-zone ReferenceError if it fires synchronously.
+  const transcript: string[] = [];
+  const entries: Entry[] = [];
+  // Args aren't carried on tool_execution_end, so remember them from _start.
+  const toolArgs = new Map<string, string>();
+  // Streaming text/thinking gets coalesced into a single multi-line entry.
+  let streamingKind: 'text' | 'thinking' | null = null;
+  let streamingBuffer = '';
+  let streamingEntry: Entry | null = null;
+
   // Restrict the sub-agent to the standard built-in tools. Without this, pi
   // auto-discovers user-installed extensions (e.g. @mjakl/pi-subagent) and
   // exposes their tools to the sub-agent, which then wastes tokens trying to
@@ -71,6 +77,15 @@ export async function runAgentSession(
     cwd,
     tools: ['read', 'bash', 'edit', 'write'],
   });
+
+  // If the caller's signal was already aborted before we got here, bail out
+  // immediately. Subscribing the abort listener and then falling into
+  // session.prompt(prompt) on a session whose abort() has already fired is
+  // undefined behavior in pi.
+  if (signal?.aborted) {
+    session.dispose();
+    return { success: false, aborted: true, output: '' };
+  }
 
   // Crash diagnostics: while this sub-agent is running, log any unhandled
   // rejection or uncaught exception to /tmp/specd-debug.log, regardless of
@@ -91,8 +106,15 @@ export async function runAgentSession(
   const onUnhandled = (err: unknown) => {
     writeDebug('unhandledRejection', err);
   };
+  // For uncaught exceptions, we capture diagnostics and then re-throw on the
+  // next tick so Node's default crash-and-exit semantics are preserved. If we
+  // only logged and swallowed, the process would keep running in an undefined
+  // state — worse than a crash.
   const onUncaught = (err: unknown) => {
     writeDebug('uncaughtException', err);
+    process.nextTick(() => {
+      throw err;
+    });
   };
   process.on('unhandledRejection', onUnhandled);
   process.on('uncaughtException', onUncaught);
@@ -107,10 +129,7 @@ export async function runAgentSession(
     aborted = true;
     void session.abort();
   };
-  if (signal) {
-    if (signal.aborted) onAbort();
-    else signal.addEventListener('abort', onAbort, { once: true });
-  }
+  if (signal) signal.addEventListener('abort', onAbort, { once: true });
 
   const reportSteerError = (err: unknown) => {
     const msg = err instanceof Error ? err.message : String(err);
@@ -118,28 +137,21 @@ export async function runAgentSession(
     pushNote(`[steer failed] ${msg}`);
   };
 
-  // Drive user input either as a steer (mid-turn) or a prompt (between turns).
-  // Steer requires the agent to be currently streaming; prompt is the right
-  // primitive when the previous turn has already settled.
+  // Always route user input through session.steer(). Pi's _queueSteer queues
+  // steers even before streaming starts and the agent picks them up on the
+  // next turn, so steer is safe pre-stream. Calling session.prompt(text) while
+  // the agent is processing throws "Agent is already processing" — there's a
+  // race window between the initial prompt() returning to the event loop and
+  // isStreaming flipping true that previously dropped the user's keystroke.
   const handleUserInput = (text: string) => {
     if (aborted) return;
     try {
-      const driver = session.isStreaming ? session.steer(text) : session.prompt(text);
-      driver.catch(reportSteerError);
+      void session.steer(text).catch(reportSteerError);
     } catch (err) {
       reportSteerError(err);
     }
   };
   const detachInput = attachInput?.(handleUserInput);
-
-  const transcript: string[] = [];
-  const entries: Entry[] = [];
-  // Args aren't carried on tool_execution_end, so remember them from _start.
-  const toolArgs = new Map<string, string>();
-  // Streaming text/thinking gets coalesced into a single multi-line entry.
-  let streamingKind: 'text' | 'thinking' | null = null;
-  let streamingBuffer = '';
-  let streamingEntry: Entry | null = null;
 
   const emit = () => {
     if (!onLogUpdate) return;
@@ -229,28 +241,6 @@ export async function runAgentSession(
   try {
     pushNote('starting…');
     await session.prompt(prompt);
-    if (stayAliveUntil && !wasAborted()) {
-      // Keep the session alive so the user can continue the conversation in
-      // the viewer. Each user input was already routed through handleUserInput
-      // by attachInput; we just need to wait until told to stop.
-      pushNote('[chat open — close the viewer pane to finish]');
-      await Promise.race([
-        stayAliveUntil,
-        new Promise<void>((resolve) => {
-          if (signal) {
-            if (signal.aborted) resolve();
-            else
-              signal.addEventListener(
-                'abort',
-                () => {
-                  resolve();
-                },
-                { once: true },
-              );
-          }
-        }),
-      ]);
-    }
     const finalAborted = wasAborted();
     return {
       success: !finalAborted,
@@ -327,6 +317,27 @@ function handleEvent(event: AgentSessionEvent, c: EventCtx) {
     }
     case 'agent_end':
       c.pushNote('done');
+      break;
+    case 'compaction_start':
+      c.pushNote('[compacting context...]');
+      break;
+    case 'compaction_end':
+      c.pushNote('[compaction complete]');
+      break;
+    case 'auto_retry_start': {
+      const detail = event.errorMessage ? `: ${firstLine(event.errorMessage)}` : '';
+      c.pushNote(`[retrying after API error${detail}]`);
+      break;
+    }
+    case 'auto_retry_end':
+      // No note — the next message_update / turn_end will speak for itself.
+      break;
+    default:
+      // Other AgentSessionEvent variants (turn_start, turn_end, agent_start,
+      // message_start, tool_execution_update, queue_update,
+      // session_info_changed, …) are intentionally ignored — they don't map
+      // to a useful side-pane line. The union is open from pi's side, so we
+      // don't use an exhaustiveness check here.
       break;
   }
 }
