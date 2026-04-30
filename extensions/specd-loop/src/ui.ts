@@ -22,7 +22,7 @@ export function surfaceReviewItems(pi: ExtensionAPI, cwd: string, findings: Revi
   sendProgress(
     pi,
     'info',
-    `📋 ${findings.length} review item(s) need a decision.\n\nFile: ${reviewPath} (gitignored)\n\nAdd a \`decision:\` line under each finding (see options listed in each item), then re-run \`/specd:loop\`.`,
+    `${findings.length} review finding(s) need a decision. Edit ${reviewPath} (gitignored, lives only on disk) and add a \`decision:\` line under each finding (see options listed below), then re-run \`/specd:loop\`.`,
   );
 
   for (let i = 0; i < findings.length; i++) {

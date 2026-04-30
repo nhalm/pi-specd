@@ -10,6 +10,6 @@ import { PLAN_PROMPT } from './prompts.js';
  * session: pi reads the brief, asks questions, and creates specs in response.
  */
 export function runPlan(pi: ExtensionAPI, ctx: ExtensionCommandContext): void {
-  ctx.ui.notify('📝 Starting planning session...', 'info');
+  ctx.ui.notify('Starting planning session.', 'info');
   pi.sendUserMessage(PLAN_PROMPT);
 }

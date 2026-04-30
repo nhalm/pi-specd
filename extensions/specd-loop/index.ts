@@ -1,3 +1,5 @@
+import { resolve } from 'node:path';
+
 import type { ExtensionAPI, ExtensionCommandContext } from '@mariozechner/pi-coding-agent';
 
 import { runLoop } from './src/loop.js';
@@ -17,7 +19,7 @@ async function preflight(ctx: ExtensionCommandContext): Promise<boolean> {
   const setupCheck = await ensureSpecdSetup(ctx.cwd);
   if (!setupCheck.ok) {
     ctx.ui.notify(
-      `❌ specd is not initialized in this project. Missing: ${setupCheck.missing.join(', ')}\n\nRun /specd:setup first.`,
+      `specd is not initialized in this project. Missing: ${setupCheck.missing.join(', ')}\n\nRun /specd:setup first.`,
       'error',
     );
     return false;
@@ -54,7 +56,12 @@ export default function (pi: ExtensionAPI) {
     async handler(_args, ctx) {
       const result = await runSetup(ctx);
 
-      let msg = `📦 Specd Setup Complete (v${EXTENSION_VERSION})\n\n`;
+      if (result.aborted) {
+        ctx.ui.notify('Setup cancelled. No files were modified.', 'info');
+        return;
+      }
+
+      let msg = `Specd setup complete (v${EXTENSION_VERSION})\n\n`;
       if (result.copied.length > 0) {
         msg += `**Created:**\n`;
         result.copied.forEach((f) => {
@@ -110,15 +117,24 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand('specd:status', {
     description: 'Show specd work list status',
     async handler(_args, ctx) {
-      const workList = await loadWorkList(ctx.cwd);
-      const reviewList = await loadReviewList(ctx.cwd);
+      let workList, reviewList;
+      try {
+        workList = await loadWorkList(ctx.cwd);
+        reviewList = await loadReviewList(ctx.cwd);
+      } catch (err) {
+        ctx.ui.notify(
+          `Could not read specd state: ${err instanceof Error ? err.message : String(err)}`,
+          'error',
+        );
+        return;
+      }
 
       const unblocked = getUnblockedItems(workList);
       const blocked = getBlockedItems(workList);
       const completed = getCompletedCount(workList);
       const undecided = getUndecided(reviewList.findings);
 
-      let msg = `📋 Specd Status\n`;
+      let msg = `Specd status\n`;
       msg += `   Ready items: ${unblocked.length}\n`;
       msg += `   Blocked: ${blocked.length}\n`;
       msg += `   Completed: ${completed}\n`;
@@ -135,15 +151,20 @@ export default function (pi: ExtensionAPI) {
       if (blocked.length > 0) {
         msg += `\n**Blocked:**\n`;
         blocked.slice(0, 3).forEach((item) => {
-          msg += `  • ${item.description} (blocked: ${item.blocked})\n`;
+          msg += `  - ${item.description} (blocked: ${item.blocked})\n`;
         });
       }
 
       if (undecided.length > 0) {
-        msg += `\n**Review needed:** ${undecided.length} finding(s)\n`;
+        const reviewPath = resolve(ctx.cwd, 'specd_review.yaml');
+        msg += `\n**Review needed:** ${undecided.length} finding(s) in ${reviewPath}\n`;
+        undecided.slice(0, 5).forEach((f, i) => {
+          msg += `${i + 1}. [${f.spec}] ${f.finding.split('\n')[0]}\n`;
+        });
+        if (undecided.length > 5) msg += `... +${undecided.length - 5} more\n`;
       }
 
-      msg += `\n→ ${nextAction(unblocked.length, undecided.length)}`;
+      msg += `\nNext: ${nextAction(unblocked.length, undecided.length)}`;
 
       ctx.ui.notify(msg, 'info');
     },

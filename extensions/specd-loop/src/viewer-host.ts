@@ -10,6 +10,12 @@ export interface ViewerHandle {
   /** Forward a session event to the viewer. */
   send: (event: AgentSessionEvent) => void;
   /**
+   * Update the banner pinned at the top of the viewer pane. The viewer
+   * displays `specd · <title> — type below to steer the sub-agent`. Used by
+   * the loop driver to identify the current phase per cycle.
+   */
+  setTitle: (title: string) => void;
+  /**
    * Subscribe to user input typed into the viewer pane. Each call returns
    * an unsubscribe function. Multiple subscribers are supported but each
    * input is delivered to all of them.
@@ -207,14 +213,27 @@ export async function spawnViewerPane(opts?: {
   });
 
   let closed = false;
+  const writeLine = (payload: unknown) => {
+    if (closed) return;
+    try {
+      writeSync(fd, `${JSON.stringify(payload)}\n`);
+    } catch {
+      closed = true;
+    }
+  };
+
+  // Push the spawn-time title to the viewer immediately so the banner
+  // identifies the pane before any session events arrive.
+  if (opts?.title) {
+    writeLine({ type: 'specd:title', title: opts.title });
+  }
+
   return {
     send: (event) => {
-      if (closed) return;
-      try {
-        writeSync(fd, `${JSON.stringify(event)}\n`);
-      } catch {
-        closed = true;
-      }
+      writeLine(event);
+    },
+    setTitle: (title) => {
+      writeLine({ type: 'specd:title', title });
     },
     onInput: (handler) => {
       inputHandlers.add(handler);

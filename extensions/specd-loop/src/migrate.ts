@@ -89,11 +89,38 @@ export async function runMigrate(
   ctx: ExtensionCommandContext,
 ): Promise<AgentRunResult> {
   const { cwd, ui } = ctx;
-  ui.notify('🚀 Starting migration...', 'info');
+
+  const proceed = await ui.confirm(
+    'specd migrate',
+    [
+      'Migration will rewrite files in this repo:',
+      '  - AGENTS.md',
+      '  - specs/*.md (strips version, status, changelog)',
+      '  - specs/README.md',
+      '  - specd_work_list.yaml',
+      '',
+      'Recommended: commit or stash any pending changes first so the migration diff is easy to review.',
+      '',
+      'Proceed?',
+    ].join('\n'),
+  );
+  if (!proceed) {
+    ui.notify('Migration cancelled.', 'info');
+    return { success: false, output: '', aborted: true };
+  }
+
+  ui.notify('Starting migration.', 'info');
+
+  if (!process.env.TMUX) {
+    ui.notify(
+      'Running outside tmux: migration activity will appear in a compact log above this editor. For a live side pane and mid-run steering, launch pi inside a tmux session.',
+      'info',
+    );
+  }
 
   // In tmux: open a side pane that renders sub-agent activity using pi's own
   // components. Outside tmux: fall back to the rolling-log widget.
-  const viewer = await spawnViewerPane({ title: 'Migrating' });
+  const viewer = await spawnViewerPane({ title: 'migration' });
   const ctrlC = abortOnCtrlC(ctx);
   const controller = new AbortController();
   ctrlC.setController(controller);
@@ -124,12 +151,12 @@ export async function runMigrate(
   })();
 
   if (result.aborted) {
-    ui.notify('⏹  Migration aborted', 'warning');
+    ui.notify('Migration aborted by user.', 'warning');
     return result;
   }
 
   if (!result.success) {
-    ui.notify(`❌ Migration failed: ${result.output}`, 'error');
+    ui.notify(`Migration failed: ${result.output}`, 'error');
     return result;
   }
 

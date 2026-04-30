@@ -86,7 +86,7 @@ export async function runAgentSession(
     } catch {
       // best-effort
     }
-    transcript.push(`⚠️ ${kind}: ${msg}\n`);
+    transcript.push(`[${kind}] ${msg}\n`);
   };
   const onUnhandled = (err: unknown) => {
     writeDebug('unhandledRejection', err);
@@ -114,8 +114,8 @@ export async function runAgentSession(
 
   const reportSteerError = (err: unknown) => {
     const msg = err instanceof Error ? err.message : String(err);
-    transcript.push(`⚠️ steer failed: ${msg}\n`);
-    pushNote(`⚠️ steer failed: ${msg}`);
+    transcript.push(`[steer-failed] ${msg}\n`);
+    pushNote(`[steer failed] ${msg}`);
   };
 
   // Drive user input either as a steer (mid-turn) or a prompt (between turns).
@@ -193,11 +193,11 @@ export async function runAgentSession(
   };
 
   const updateStreaming = (kind: 'text' | 'thinking', delta: string) => {
-    const icon = kind === 'thinking' ? '💭' : '💬';
+    const label = kind === 'thinking' ? '[thinking]' : '[assistant]';
     if (streamingKind !== kind || !streamingEntry) {
       streamingKind = kind;
       streamingBuffer = delta;
-      streamingEntry = { lines: [icon] };
+      streamingEntry = { lines: [label] };
       entries.push(streamingEntry);
       trimEntries();
     } else {
@@ -207,7 +207,10 @@ export async function runAgentSession(
       .split('\n')
       .map((l) => l.trimEnd())
       .filter((l) => l.length > 0);
-    streamingEntry.lines = lines.map((line, i) => (i === 0 ? `${icon} ${line}` : `   ${line}`));
+    const indent = ' '.repeat(label.length + 1);
+    streamingEntry.lines = lines.map((line, i) =>
+      i === 0 ? `${label} ${line}` : `${indent}${line}`,
+    );
     emit();
   };
 
@@ -230,7 +233,7 @@ export async function runAgentSession(
       // Keep the session alive so the user can continue the conversation in
       // the viewer. Each user input was already routed through handleUserInput
       // by attachInput; we just need to wait until told to stop.
-      pushNote('💬 chat open — close the viewer pane to finish');
+      pushNote('[chat open — close the viewer pane to finish]');
       await Promise.race([
         stayAliveUntil,
         new Promise<void>((resolve) => {
@@ -284,7 +287,7 @@ function handleEvent(event: AgentSessionEvent, c: EventCtx) {
     case 'tool_execution_start': {
       const summary = summarizeToolArgs(event.toolName, event.args);
       c.toolArgs.set(event.toolCallId, summary);
-      const line = `▶ ${toolIcon(event.toolName)} ${event.toolName}${summary ? `: ${summary}` : ''}`;
+      const line = `[run] ${event.toolName}${summary ? `: ${summary}` : ''}`;
       c.transcript.push(`${line}\n`);
       c.startTool(event.toolCallId, line);
       break;
@@ -292,9 +295,9 @@ function handleEvent(event: AgentSessionEvent, c: EventCtx) {
     case 'tool_execution_end': {
       const summary = c.toolArgs.get(event.toolCallId) ?? '';
       const resultSnippet = stringifyToolResult(event.result);
-      const icon = event.isError ? '⚠️' : '✓';
-      const line = `${icon} ${toolIcon(event.toolName)} ${event.toolName}${summary ? `: ${summary}` : ''}${
-        resultSnippet ? ` → ${resultSnippet}` : ''
+      const status = event.isError ? '[err]' : '[ok]';
+      const line = `${status} ${event.toolName}${summary ? `: ${summary}` : ''}${
+        resultSnippet ? ` -> ${resultSnippet}` : ''
       }`;
       c.transcript.push(`${line}\n`);
       c.finishTool(event.toolCallId, line);
@@ -372,28 +375,6 @@ function stringifyToolResult(result: unknown): string {
 function firstLine(s: string): string {
   const idx = s.indexOf('\n');
   return (idx === -1 ? s : s.slice(0, idx)).trim();
-}
-
-function toolIcon(name: string): string {
-  switch (name.toLowerCase()) {
-    case 'read':
-      return '📖';
-    case 'write':
-      return '📝';
-    case 'edit':
-    case 'multiedit':
-      return '✏️';
-    case 'bash':
-      return '🔧';
-    case 'glob':
-    case 'grep':
-      return '🔎';
-    case 'task':
-    case 'agent':
-      return '🤖';
-    default:
-      return '🛠️';
-  }
 }
 
 function summarizeToolArgs(toolName: string, args: unknown): string {

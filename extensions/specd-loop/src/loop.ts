@@ -53,12 +53,20 @@ export async function runLoop(
   sendProgress(
     pi,
     'info',
-    `🚀 Starting specd loop (audit: ${options.skipAudit ? 'skipped' : 'enabled'})`,
+    `Starting specd loop. Audit: ${options.skipAudit ? 'skipped' : 'enabled'}. Max cycles: ${options.maxCycles}.`,
   );
+
+  if (!process.env.TMUX) {
+    sendProgress(
+      pi,
+      'info',
+      'Running outside tmux: sub-agent activity will appear in a compact log above this editor. For a live side pane and mid-run steering, launch pi inside a tmux session.',
+    );
+  }
 
   // One viewer pane for the entire loop — every phase forwards events to it.
   // Outside tmux, viewer is null and each phase falls back to the rolling-log widget.
-  const viewer = await spawnViewerPane({ title: 'specd loop' });
+  const viewer = await spawnViewerPane({ title: 'loop' });
   // Ctrl+C aborts whichever sub-agent is currently active. Each phase
   // installs its own AbortController so an aborted phase doesn't poison the
   // rest of the loop.
@@ -67,6 +75,10 @@ export async function runLoop(
   let userAborted = false;
   try {
     userAborted = await runLoopBody(pi, ctx, options, viewer, ctrlC);
+  } catch (err) {
+    clearWidget(ctx);
+    const msg = err instanceof Error ? err.message : String(err);
+    sendProgress(pi, 'error', `Loop halted: ${msg}`);
   } finally {
     ctrlC.setController(null);
     ctrlC.unsubscribe();
@@ -74,6 +86,21 @@ export async function runLoop(
     // so they can scroll back through the run.
     if (viewer) await viewer.close({ kill: userAborted });
   }
+}
+
+/**
+ * Take the last few non-empty lines of a sub-agent transcript so a failure
+ * message can include the most recent diagnostic lines without dumping the
+ * entire output.
+ */
+function transcriptTail(output: string, lines = 6): string {
+  const tail = output
+    .split('\n')
+    .map((l) => l.trimEnd())
+    .filter((l) => l.length > 0)
+    .slice(-lines)
+    .join('\n');
+  return tail.length > 0 ? `\n--- last lines of transcript ---\n${tail}` : '';
 }
 
 /**
@@ -132,7 +159,8 @@ async function runLoopBody(
 
   // ─── Phase 1: Review intake ──────────────────────────────
   showWidget(ctx, 'Review Intake', 0, options.maxCycles, 0, 'Running...');
-  sendProgress(pi, 'running', '📋 Running review intake...');
+  sendProgress(pi, 'running', 'Running review intake.');
+  viewer?.setTitle('review intake');
   const intakePhase = await runPhase(
     ctx,
     ctrlC,
@@ -143,29 +171,33 @@ async function runLoopBody(
   clearActivityWidget(viewer, ctx);
   if (intakePhase.status === 'abort') {
     clearWidget(ctx);
-    sendProgress(pi, 'complete', '⏹  Loop aborted by user');
+    sendProgress(pi, 'complete', 'Loop aborted by user.');
     return true;
   }
   const reviewResult = intakePhase.result;
   if (!reviewResult.success && !reviewResult.aborted) {
+    const intakeLogPath = await logOutput('review-intake', reviewResult.output);
     clearWidget(ctx);
-    sendProgress(pi, 'error', `❌ Review intake failed`);
+    sendProgress(
+      pi,
+      'error',
+      `Review intake failed. Full transcript: ${intakeLogPath}${transcriptTail(reviewResult.output)}`,
+    );
     return false;
   }
 
-  const reviewLogPath = await logOutput('review-intake', reviewResult.output);
-  sendProgress(pi, 'info', `📋 Review intake logged to: ${reviewLogPath}`);
+  await logOutput('review-intake', reviewResult.output);
 
   // If the user still has undecided findings (or new ones surfaced during intake), pause.
   const reviewListAfterIntake = await loadReviewList(cwd);
   if (getUndecided(reviewListAfterIntake.findings).length > 0) {
     surfaceReviewItems(pi, cwd, getUndecided(reviewListAfterIntake.findings));
     clearWidget(ctx);
-    sendProgress(pi, 'complete', `⏸️ Decide the items above, then re-run /specd:loop.`);
+    sendProgress(pi, 'complete', 'Decide the items above, then re-run /specd:loop.');
     return false;
   }
 
-  sendProgress(pi, 'info', '✅ Review intake complete');
+  sendProgress(pi, 'info', 'Review intake complete.');
 
   // ─── Phase 2: Implement loop ─────────────────────────────
   // The loop driver picks one item, hands it to the agent, and verifies a commit
@@ -180,7 +212,7 @@ async function runLoopBody(
     const item = pickNextItem(workList);
 
     if (!item) {
-      sendProgress(pi, 'info', '📋 No work items remaining');
+      sendProgress(pi, 'info', 'No work items remaining.');
       break;
     }
 
@@ -191,7 +223,7 @@ async function runLoopBody(
       sendProgress(
         pi,
         'error',
-        `❌ Cannot verify commits — this directory is not a git repository (or git is unavailable).`,
+        'Cannot verify commits: this directory is not a git repository (or git is unavailable). Run `git init` and try again.',
       );
       return false;
     }
@@ -201,8 +233,9 @@ async function runLoopBody(
     sendProgress(
       pi,
       'running',
-      `🔨 Cycle ${cycle}/${options.maxCycles}: [${item.spec}] ${item.description}`,
+      `Cycle ${cycle}/${options.maxCycles}: [${item.spec}] ${item.description}`,
     );
+    viewer?.setTitle(`cycle ${cycle}/${options.maxCycles}: [${item.spec}] ${item.description}`);
 
     const implPhase = await runPhase(
       ctx,
@@ -221,13 +254,13 @@ async function runLoopBody(
 
     if (implPhase.status === 'abort') {
       clearWidget(ctx);
-      sendProgress(pi, 'complete', `⏹  Loop aborted by user (cycle ${cycle})`);
+      sendProgress(pi, 'complete', `Loop aborted by user during cycle ${cycle}.`);
       return true;
     }
     // User Ctrl+C'd this cycle but chose to keep going. Skip post-checks (no
     // commit landed) and let the next loop iteration pick up another item.
     if (implResult.aborted) {
-      sendProgress(pi, 'info', `↪︎ Cycle ${cycle} skipped — moving on`);
+      sendProgress(pi, 'info', `Cycle ${cycle} skipped. Picking up the next item.`);
       continue;
     }
     if (!implResult.success) {
@@ -235,7 +268,7 @@ async function runLoopBody(
       sendProgress(
         pi,
         'error',
-        `❌ Implementation subprocess failed (cycle ${cycle}, logged: ${cycleLogPath})`,
+        `Cycle ${cycle} failed before completion. Full transcript: ${cycleLogPath}${transcriptTail(implResult.output)}`,
       );
       return false;
     }
@@ -247,14 +280,15 @@ async function runLoopBody(
     const committed = headAfter !== null && headAfter !== headBefore;
 
     if (reviewGrew) {
+      const newCount = reviewAfter.findings.length - reviewBefore;
       sendProgress(
         pi,
         'info',
-        `⚠️ Agent surfaced ${reviewAfter.findings.length - reviewBefore} new review item(s) for [${item.spec}] ${item.description}. Item not marked complete.`,
+        `Agent surfaced ${newCount} new review finding(s) for [${item.spec}] ${item.description}. Item not marked complete.`,
       );
       surfaceReviewItems(pi, cwd, getUndecided(reviewAfter.findings));
       clearWidget(ctx);
-      sendProgress(pi, 'complete', `⏸️ Decide the items above, then re-run /specd:loop.`);
+      sendProgress(pi, 'complete', 'Decide the items above, then re-run /specd:loop.');
       return false;
     }
 
@@ -263,7 +297,14 @@ async function runLoopBody(
       sendProgress(
         pi,
         'error',
-        `❌ Agent did not commit work for [${item.spec}] ${item.description} (logged: ${cycleLogPath}). Item not marked complete. Loop aborted.`,
+        [
+          `Cycle ${cycle} ended without a commit. Item [${item.spec}] ${item.description} stays incomplete.`,
+          'To recover:',
+          '  1. Run `git status` — if the agent left staged or unstaged changes, finish the commit (or `git stash`/`git checkout -- .` to discard) before re-running.',
+          '  2. If a pre-commit / commit-msg hook blocked the commit, fix the underlying issue before re-running.',
+          `  3. Full transcript: ${cycleLogPath}`,
+          'Re-running /specd:loop will pick this same item up again.',
+        ].join('\n'),
       );
       return false;
     }
@@ -271,12 +312,11 @@ async function runLoopBody(
     // Mark complete and persist.
     const fresh = await loadWorkList(cwd);
     if (!markItemCompleted(fresh, item.spec, item.description)) {
-      // Should be unreachable — item was just picked from this list.
       clearWidget(ctx);
       sendProgress(
         pi,
         'error',
-        `❌ Internal error: could not locate item to mark complete: [${item.spec}] ${item.description}.`,
+        `Couldn't re-locate item [${item.spec}] ${item.description} in the work list. Was specd_work_list.yaml edited mid-loop? Inspect the file and re-run /specd:loop.`,
       );
       return false;
     }
@@ -284,27 +324,28 @@ async function runLoopBody(
     totalProcessed++;
 
     const remainingAfter = getUnblockedItems(fresh).length;
-    showWidget(ctx, 'Implement', cycle, options.maxCycles, remainingAfter, 'Done ✓');
+    showWidget(ctx, 'Implement', cycle, options.maxCycles, remainingAfter, 'Done');
     sendProgress(
       pi,
-      'running',
-      `  ✓ Completed [${item.spec}] ${item.description} — ${remainingAfter} item(s) remaining (logged: ${cycleLogPath})`,
+      'info',
+      `Completed [${item.spec}] ${item.description}. ${remainingAfter} item(s) remaining. Transcript: ${cycleLogPath}`,
     );
 
     if (remainingAfter === 0) {
-      sendProgress(pi, 'complete', '🎉 All work items complete!');
+      sendProgress(pi, 'info', 'All work items complete.');
       break;
     }
   }
 
   if (cycle >= options.maxCycles) {
     const workList = await loadWorkList(cwd);
-    if (getUnblockedItems(workList).length > 0) {
+    const remaining = getUnblockedItems(workList).length;
+    if (remaining > 0) {
       clearWidget(ctx);
       sendProgress(
         pi,
         'error',
-        `⚠️ Max cycles (${options.maxCycles}) reached. ${getUnblockedItems(workList).length} items remain — re-run /specd:loop to continue.`,
+        `Max cycles (${options.maxCycles}) reached with ${remaining} ready item(s) still pending. Re-run /specd:loop to continue, or pass --max-cycles=N to raise the limit.`,
       );
       return false;
     }
@@ -313,12 +354,13 @@ async function runLoopBody(
   // ─── Phase 3: Audit ───────────────────────────────────────
   if (options.skipAudit) {
     showWidget(ctx, 'Complete', cycle, options.maxCycles, 0, 'Audit skipped');
-    sendProgress(pi, 'complete', `✅ Done! Processed ${totalProcessed} items (audit skipped)`);
+    sendProgress(pi, 'complete', `Loop done. Processed ${totalProcessed} item(s). Audit skipped.`);
     return false;
   }
 
   showWidget(ctx, 'Audit', cycle, options.maxCycles, 0, 'Running...');
-  sendProgress(pi, 'running', `🔍 Running audit...`);
+  sendProgress(pi, 'running', 'Running audit.');
+  viewer?.setTitle('audit');
   const auditPhase = await runPhase(
     ctx,
     ctrlC,
@@ -329,7 +371,7 @@ async function runLoopBody(
   clearActivityWidget(viewer, ctx);
   if (auditPhase.status === 'abort') {
     clearWidget(ctx);
-    sendProgress(pi, 'complete', '⏹  Loop aborted by user (audit)');
+    sendProgress(pi, 'complete', 'Loop aborted by user during audit.');
     return true;
   }
   const auditResult = auditPhase.result;
@@ -337,17 +379,21 @@ async function runLoopBody(
   // so just exit gracefully without treating it as a failure.
   if (auditResult.aborted) {
     clearWidget(ctx);
-    sendProgress(pi, 'complete', `✅ Loop done (audit skipped via Ctrl+C)`);
+    sendProgress(pi, 'complete', 'Loop done. Audit skipped via Ctrl+C.');
     return false;
   }
   if (!auditResult.success) {
+    const failedAuditLog = await logOutput('audit', auditResult.output);
     clearWidget(ctx);
-    sendProgress(pi, 'error', `❌ Audit failed`);
+    sendProgress(
+      pi,
+      'error',
+      `Audit failed before completion. Full transcript: ${failedAuditLog}${transcriptTail(auditResult.output)}`,
+    );
     return false;
   }
 
-  const auditLogPath = await logOutput('audit', auditResult.output);
-  sendProgress(pi, 'running', `🔍 Audit logged to: ${auditLogPath}`);
+  await logOutput('audit', auditResult.output);
 
   // If audit raised review items, pause for the user.
   const reviewList = await loadReviewList(cwd);
@@ -356,7 +402,7 @@ async function runLoopBody(
   if (undecided.length > 0) {
     surfaceReviewItems(pi, cwd, undecided);
     clearWidget(ctx);
-    sendProgress(pi, 'complete', `⏸️ Decide the items above, then re-run /specd:loop.`);
+    sendProgress(pi, 'complete', 'Decide the items above, then re-run /specd:loop.');
     return false;
   }
 
@@ -365,10 +411,14 @@ async function runLoopBody(
   const pruned = pruneCompletedSpecs(finalWorkList);
   if (pruned.length > 0) {
     await saveWorkList(cwd, finalWorkList);
-    sendProgress(pi, 'info', `🧹 Removed completed specs from work list: ${pruned.join(', ')}`);
   }
 
   clearWidget(ctx);
-  sendProgress(pi, 'complete', `✅ Loop complete! ${totalProcessed} items, audit clean`);
+  const prunedSuffix = pruned.length > 0 ? ` Pruned completed specs: ${pruned.join(', ')}.` : '';
+  sendProgress(
+    pi,
+    'complete',
+    `Loop complete. Processed ${totalProcessed} item(s). Audit clean.${prunedSuffix}`,
+  );
   return false;
 }

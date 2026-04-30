@@ -10,7 +10,7 @@
 
 import { createReadStream, createWriteStream } from 'node:fs';
 
-import { ProcessTerminal, TUI, Container, Input } from '@mariozechner/pi-tui';
+import { ProcessTerminal, TUI, Container, Input, Text } from '@mariozechner/pi-tui';
 import {
   AssistantMessageComponent,
   ToolExecutionComponent,
@@ -32,6 +32,24 @@ const tui = new TUI(term);
 
 const chatContainer = new Container();
 tui.addChild(chatContainer);
+
+// Banner pinned to the top via a non-capturing overlay so it stays visible
+// while events scroll below it. Identifies which pane this is and what phase
+// is running, so a user with both parent and child panes open can tell at a
+// glance which input box steers the sub-agent. Updated via 'specd:title'
+// control events on the events FIFO.
+const titleText = new Text('specd');
+tui.showOverlay(titleText, {
+  anchor: 'top-left',
+  width: '100%',
+  offsetX: 0,
+  offsetY: 0,
+  nonCapturing: true,
+});
+function setTitle(text) {
+  titleText.setText(`specd · ${text} — type below to steer the sub-agent`);
+  tui.requestRender();
+}
 
 // Input box pinned to the bottom of the pane via an overlay (so it stays
 // visible no matter how much the chat above scrolls).
@@ -182,7 +200,12 @@ stream.on('data', (chunk) => {
     buffer = buffer.slice(nl + 1);
     if (!line) continue;
     try {
-      handleEvent(JSON.parse(line));
+      const parsed = JSON.parse(line);
+      if (parsed && parsed.type === 'specd:title' && typeof parsed.title === 'string') {
+        setTitle(parsed.title);
+        continue;
+      }
+      handleEvent(parsed);
     } catch (err) {
       console.error(`[viewer] parse error: ${err.message}`);
     }

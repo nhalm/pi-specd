@@ -25,6 +25,7 @@ interface SetupResult {
   copied: string[];
   skipped: string[];
   errors: string[];
+  aborted?: boolean;
 }
 
 export interface DetectedCommands {
@@ -342,7 +343,22 @@ export async function runSetup(ctx: ExtensionCommandContext): Promise<SetupResul
   const cwd = ctx.cwd;
   const result: SetupResult = { copied: [], skipped: [], errors: [] };
 
-  ctx.ui.notify('📦 Starting specd setup...', 'info');
+  const willCreate = [
+    'AGENTS.md (if missing)',
+    'PROJECT.md (if missing)',
+    'specs/README.md (if missing)',
+    'specd_work_list.yaml (if missing, gitignored)',
+    'specd_review.yaml (if missing, gitignored)',
+    '.pi-specd (version marker, gitignored)',
+    '.gitignore (appends specd entries if missing)',
+  ];
+  const proceed = await ctx.ui.confirm(
+    'specd setup',
+    `Setup will create or update these files in ${cwd}:\n\n${willCreate.map((p) => `  - ${p}`).join('\n')}\n\nProceed?`,
+  );
+  if (!proceed) {
+    return { ...result, aborted: true };
+  }
 
   // Step 1: Detect existing project info
   const detectedName = await detectProjectName(cwd);
@@ -457,7 +473,7 @@ export async function checkVersion(cwd: string): Promise<VersionCheckResult> {
   if (!existsSync(specdFilePath)) {
     return {
       ok: false,
-      message: '⚠️  No .pi-specd file found. Run /specd:setup first.',
+      message: 'No .pi-specd file found. Run /specd:setup first.',
     };
   }
 
@@ -465,13 +481,13 @@ export async function checkVersion(cwd: string): Promise<VersionCheckResult> {
     const content = await readFile(specdFilePath, 'utf-8');
     const parsed: unknown = JSON.parse(content);
     if (!isSpecdInfo(parsed)) {
-      return { ok: false, message: '⚠️  .pi-specd file is malformed.' };
+      return { ok: false, message: '.pi-specd file is malformed.' };
     }
 
     if (parsed.version !== EXTENSION_VERSION) {
       return {
         ok: false,
-        message: `⚠️  Extension version mismatch: project uses ${parsed.version}, extension is ${EXTENSION_VERSION}. Run /specd:setup to update.`,
+        message: `Extension version mismatch: project uses ${parsed.version}, extension is ${EXTENSION_VERSION}. Run /specd:setup to update.`,
       };
     }
 
@@ -479,7 +495,7 @@ export async function checkVersion(cwd: string): Promise<VersionCheckResult> {
   } catch {
     return {
       ok: false,
-      message: '⚠️  Could not read .pi-specd file.',
+      message: 'Could not read .pi-specd file.',
     };
   }
 }
