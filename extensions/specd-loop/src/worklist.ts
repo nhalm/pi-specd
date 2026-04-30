@@ -58,7 +58,12 @@ function normalizeWorkList(data: unknown): WorkList {
         for (const item of spec.items) {
           if (!isRecord(item)) continue;
           const description = asString(item.description);
-          if (item.completed) {
+          // Strict equality on the literal `true`. A hand-edited YAML file
+          // with `completed: "false"` (string) or `completed: 1` would
+          // truthy-coerce into the completed branch under truthy checks; we
+          // want anything that isn't the YAML boolean `true` to remain
+          // pending so the loop will pick it up.
+          if (item.completed === true) {
             items.push({ spec: name, description, completed: true });
           } else {
             items.push({
