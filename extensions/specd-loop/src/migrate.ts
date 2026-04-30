@@ -106,7 +106,7 @@ export async function runMigrate(
   );
   if (!proceed) {
     ui.notify('Migration cancelled.', 'info');
-    return { success: false, output: '', aborted: true };
+    return { kind: 'aborted', output: '' };
   }
 
   ui.notify('Starting migration.', 'info');
@@ -162,12 +162,12 @@ export async function runMigrate(
     else ui.setWidget('specd-activity', undefined);
   }
 
-  if (result.aborted) {
+  if (result.kind === 'aborted') {
     ui.notify('Migration aborted by user.', 'warning');
     return result;
   }
 
-  if (!result.success) {
+  if (result.kind === 'error') {
     ui.notify(`Migration failed: ${result.output}`, 'error');
     return result;
   }

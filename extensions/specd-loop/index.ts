@@ -42,7 +42,7 @@ export default function (pi: ExtensionAPI) {
     async handler(_args, ctx) {
       const result = await runMigrate(pi, ctx);
 
-      if (!result.success && !result.aborted) {
+      if (result.kind === 'error') {
         ctx.ui.notify('Migration failed. Check output above for details.', 'error');
       }
     },

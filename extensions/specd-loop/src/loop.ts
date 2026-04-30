@@ -153,7 +153,7 @@ async function runPhase(
   } finally {
     release();
   }
-  if (!result.aborted) return { status: 'ok', result };
+  if (result.kind !== 'aborted') return { status: 'ok', result };
   // User Ctrl+C'd this phase. Ask whether to keep going.
   const cont = await ctx.ui.confirm(
     'Aborted',
@@ -230,7 +230,7 @@ async function runLoopBody(
     return true;
   }
   const reviewResult = intakePhase.result;
-  if (!reviewResult.success && !reviewResult.aborted) {
+  if (reviewResult.kind === 'error') {
     const intakeLogPath = await logOutput('review-intake', reviewResult.output);
     clearWidget(ctx);
     sendProgress(
@@ -315,11 +315,11 @@ async function runLoopBody(
     }
     // User Ctrl+C'd this cycle but chose to keep going. Skip post-checks (no
     // commit landed) and let the next loop iteration pick up another item.
-    if (implResult.aborted) {
+    if (implResult.kind === 'aborted') {
       sendProgress(pi, 'info', `Cycle ${cycle} skipped. Picking up the next item.`);
       continue;
     }
-    if (!implResult.success) {
+    if (implResult.kind === 'error') {
       clearWidget(ctx);
       sendProgress(
         pi,
@@ -443,12 +443,12 @@ async function runLoopBody(
   const auditResult = auditPhase.result;
   // Audit was Ctrl+C'd but user said keep going. There's nothing after audit,
   // so just exit gracefully without treating it as a failure.
-  if (auditResult.aborted) {
+  if (auditResult.kind === 'aborted') {
     clearWidget(ctx);
     sendProgress(pi, 'complete', 'Loop done. Audit skipped via Ctrl+C.');
     return false;
   }
-  if (!auditResult.success) {
+  if (auditResult.kind === 'error') {
     const failedAuditLog = await logOutput('audit', auditResult.output);
     clearWidget(ctx);
     sendProgress(

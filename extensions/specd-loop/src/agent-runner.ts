@@ -3,11 +3,17 @@ import { tmpdir } from 'node:os';
 
 import { createAgentSession, type AgentSessionEvent } from '@mariozechner/pi-coding-agent';
 
-export interface AgentRunResult {
-  success: boolean;
-  output: string;
-  aborted?: boolean;
-}
+/**
+ * Outcome of a single sub-agent run. The `kind` discriminator replaces the
+ * older `success` / `aborted` boolean pair so callers can never observe the
+ * nonsense combination `success: true, aborted: true`. `'error'` covers the
+ * old `success: false, aborted: false` case (the runner caught an exception
+ * mid-flight) and carries the original error along for diagnostics.
+ */
+export type AgentRunResult =
+  | { kind: 'success'; output: string }
+  | { kind: 'aborted'; output: string }
+  | { kind: 'error'; output: string; error?: unknown };
 
 export interface RunAgentOptions {
   /**
@@ -84,7 +90,7 @@ export async function runAgentSession(
   // undefined behavior in pi.
   if (signal?.aborted) {
     session.dispose();
-    return { success: false, aborted: true, output: '' };
+    return { kind: 'aborted', output: '' };
   }
 
   // Crash diagnostics: while this sub-agent is running, log any unhandled
@@ -242,17 +248,15 @@ export async function runAgentSession(
     pushNote('starting…');
     await session.prompt(prompt);
     const finalAborted = wasAborted();
-    return {
-      success: !finalAborted,
-      aborted: finalAborted,
-      output: transcript.join('') + (finalAborted ? `\n[aborted]` : ''),
-    };
+    return finalAborted
+      ? { kind: 'aborted', output: `${transcript.join('')}\n[aborted]` }
+      : { kind: 'success', output: transcript.join('') };
   } catch (err) {
-    return {
-      success: false,
-      aborted,
-      output: `${transcript.join('')}\n[exception] ${err instanceof Error ? err.message : String(err)}`,
-    };
+    const output = `${transcript.join('')}\n[exception] ${err instanceof Error ? err.message : String(err)}`;
+    // If the abort signal fired during/around the throw, classify as aborted
+    // — the user-initiated cancel takes precedence over the resulting
+    // exception (which is typically just the cancellation surfacing).
+    return wasAborted() ? { kind: 'aborted', output } : { kind: 'error', output, error: err };
   } finally {
     process.off('unhandledRejection', onUnhandled);
     process.off('uncaughtException', onUncaught);
