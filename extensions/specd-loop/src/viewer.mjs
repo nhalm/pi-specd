@@ -230,10 +230,17 @@ stream.on('data', (chunk) => {
 
 stream.on('end', () => {
   tui.requestRender(true);
-  setTimeout(() => process.exit(0), 30_000);
+  setTimeout(() => {
+    // Restore the terminal (cursor, alt-screen, raw mode) before exiting so
+    // the surrounding shell isn't left in a weird state — important when the
+    // pane is killed mid-run.
+    tui.stop();
+    process.exit(0);
+  }, 30_000);
 });
 
 stream.on('error', (err) => {
   console.error(`[viewer] stream error: ${err.message}`);
+  tui.stop();
   process.exit(1);
 });
