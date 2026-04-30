@@ -6,8 +6,9 @@ import type {
 
 import { abortOnCtrlC, type CtrlCWatcher } from './abort-on-ctrl-c.js';
 import { runAgentSession } from './agent-runner.js';
-import { getHeadCommit } from './git.js';
+import { getHeadCommit, getNewCommitCount } from './git.js';
 import { logOutput } from './logger.js';
+import { verifyImplementContract } from './loop-verify.js';
 import { spawnViewerPane, type ViewerHandle } from './viewer-host.js';
 import { buildImplementPrompt, REVIEW_INTAKE_PROMPT, AUDIT_PROMPT } from './prompts.js';
 import { loadReviewList, getUndecided } from './review.js';
@@ -275,16 +276,22 @@ async function runLoopBody(
 
     // Post-checks: did the agent surface ambiguity? did it commit?
     const reviewAfter = await loadReviewList(cwd);
-    const reviewGrew = reviewAfter.findings.length > reviewBefore;
     const headAfter = await getHeadCommit(cwd);
-    const committed = headAfter !== null && headAfter !== headBefore;
+    const newCommitCount =
+      headAfter !== null && headAfter !== headBefore ? await getNewCommitCount(cwd, headBefore) : 0;
+    const outcome = verifyImplementContract({
+      reviewBefore,
+      reviewAfter: reviewAfter.findings.length,
+      headBefore,
+      headAfter,
+      newCommitCount,
+    });
 
-    if (reviewGrew) {
-      const newCount = reviewAfter.findings.length - reviewBefore;
+    if (outcome.kind === 'review-grew') {
       sendProgress(
         pi,
         'info',
-        `Agent surfaced ${newCount} new review finding(s) for [${item.spec}] ${item.description}. Item not marked complete.`,
+        `Agent surfaced ${outcome.newCount} new review finding(s) for [${item.spec}] ${item.description}. Item not marked complete.`,
       );
       surfaceReviewItems(pi, cwd, getUndecided(reviewAfter.findings));
       clearWidget(ctx);
@@ -292,13 +299,17 @@ async function runLoopBody(
       return false;
     }
 
-    if (!committed) {
+    if (outcome.kind === 'no-commit' || outcome.kind === 'amend-only') {
+      const reason =
+        outcome.kind === 'amend-only'
+          ? 'HEAD changed but no new commit descends from the prior tip (looks like `git commit --amend`).'
+          : 'No new commit landed.';
       clearWidget(ctx);
       sendProgress(
         pi,
         'error',
         [
-          `Cycle ${cycle} ended without a commit. Item [${item.spec}] ${item.description} stays incomplete.`,
+          `Cycle ${cycle} ended without forward progress. ${reason} Item [${item.spec}] ${item.description} stays incomplete.`,
           'To recover:',
           '  1. Run `git status` — if the agent left staged or unstaged changes, finish the commit (or `git stash`/`git checkout -- .` to discard) before re-running.',
           '  2. If a pre-commit / commit-msg hook blocked the commit, fix the underlying issue before re-running.',
