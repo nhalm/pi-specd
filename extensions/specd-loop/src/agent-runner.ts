@@ -74,10 +74,16 @@ export async function runAgentSession(
   prompt: string,
   options: RunAgentOptions = {},
 ): Promise<AgentRunResult> {
-  const { display, interactive, signal } = options;
+  const { display, interactive, signal: callerSignal } = options;
   const onLogUpdate = display?.kind === 'log' ? display.onUpdate : undefined;
   const onEvent = display?.kind === 'events' ? display.onEvent : undefined;
   const attachInput = interactive?.attachInput;
+  // Always work against an AbortSignal so `signal.aborted` is the single
+  // source of truth for "was this run cancelled". If the caller didn't pass
+  // one, allocate an internal controller whose signal will never fire —
+  // the symmetry lets the rest of this function treat the signal as
+  // unconditionally present.
+  const signal: AbortSignal = callerSignal ?? new AbortController().signal;
 
   // All local state declared up front so any callback wired below (debug
   // loggers, abort handlers, process listeners) can reference these without
@@ -100,11 +106,18 @@ export async function runAgentSession(
     tools: ['read', 'bash', 'edit', 'write'],
   });
 
+  // Read `signal.aborted` through this helper everywhere below the
+  // entry-guard. The lint rule's flow analysis sees the early-return
+  // guard and narrows `signal.aborted` to literal `false` for the rest of
+  // the function, which would make the post-prompt and post-throw checks
+  // look like dead code. Going through a function defeats the narrowing.
+  const isAborted = () => signal.aborted;
+
   // If the caller's signal was already aborted before we got here, bail out
   // immediately. Subscribing the abort listener and then falling into
   // session.prompt(prompt) on a session whose abort() has already fired is
   // undefined behavior in pi.
-  if (signal?.aborted) {
+  if (signal.aborted) {
     session.dispose();
     return { kind: 'aborted', output: '' };
   }
@@ -141,17 +154,12 @@ export async function runAgentSession(
   process.on('unhandledRejection', onUnhandled);
   process.on('uncaughtException', onUncaught);
 
-  // The abort handler can flip this flag during any async boundary. We expose
-  // it via a getter so the lint rule's flow analysis doesn't narrow it to its
-  // initial value.
-  let aborted = false;
-  const wasAborted = () => aborted;
+  // `signal.aborted` is the canonical truth; we no longer mirror it into a
+  // local boolean. The abort handler just forwards to the session.
   const onAbort = () => {
-    if (aborted) return;
-    aborted = true;
     void session.abort();
   };
-  if (signal) signal.addEventListener('abort', onAbort, { once: true });
+  signal.addEventListener('abort', onAbort, { once: true });
 
   const reportSteerError = (err: unknown) => {
     const msg = err instanceof Error ? err.message : String(err);
@@ -166,7 +174,7 @@ export async function runAgentSession(
   // race window between the initial prompt() returning to the event loop and
   // isStreaming flipping true that previously dropped the user's keystroke.
   const handleUserInput = (text: string) => {
-    if (aborted) return;
+    if (isAborted()) return;
     try {
       void session.steer(text).catch(reportSteerError);
     } catch (err) {
@@ -263,8 +271,10 @@ export async function runAgentSession(
   try {
     pushNote('starting…');
     await session.prompt(prompt);
-    const finalAborted = wasAborted();
-    return finalAborted
+    // Route through `isAborted()` rather than reading `signal.aborted`
+    // directly so the lint rule can't narrow the early-return guard's
+    // implication forward to here.
+    return isAborted()
       ? { kind: 'aborted', output: `${transcript.join('')}\n[aborted]` }
       : { kind: 'success', output: transcript.join('') };
   } catch (err) {
@@ -272,11 +282,11 @@ export async function runAgentSession(
     // If the abort signal fired during/around the throw, classify as aborted
     // — the user-initiated cancel takes precedence over the resulting
     // exception (which is typically just the cancellation surfacing).
-    return wasAborted() ? { kind: 'aborted', output } : { kind: 'error', output, error: err };
+    return isAborted() ? { kind: 'aborted', output } : { kind: 'error', output, error: err };
   } finally {
     process.off('unhandledRejection', onUnhandled);
     process.off('uncaughtException', onUncaught);
-    if (signal) signal.removeEventListener('abort', onAbort);
+    signal.removeEventListener('abort', onAbort);
     detachInput?.();
     unsubscribe();
     session.dispose();
