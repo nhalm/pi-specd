@@ -209,8 +209,39 @@ function handleEvent(event) {
 
     case 'agent_end':
       break;
+
+    case 'compaction_start':
+      appendToChat(new Text('[compacting context...]'));
+      break;
+
+    case 'compaction_end':
+      appendToChat(new Text('[compaction complete]'));
+      break;
+
+    case 'auto_retry_start': {
+      const detail =
+        typeof event.errorMessage === 'string' && event.errorMessage
+          ? `: ${firstLine(event.errorMessage)}`
+          : '';
+      appendToChat(new Text(`[retrying after API error${detail}]`));
+      break;
+    }
+
+    case 'auto_retry_end':
+      // No note — the next message_update / turn_end will speak for itself.
+      break;
+
+    default:
+      // Other AgentSessionEvent variants (turn_start, turn_end, agent_start,
+      // queue_update, session_info_changed, …) are intentionally ignored.
+      break;
   }
   tui.requestRender();
+}
+
+function firstLine(text) {
+  const idx = text.indexOf('\n');
+  return idx === -1 ? text : text.slice(0, idx);
 }
 
 const stream = createReadStream(eventsFifo);
