@@ -4,9 +4,21 @@
 
 import type { WorkItem } from './types.js';
 
+/**
+ * Shared tone directive prepended to every sub-agent prompt. We don't want
+ * tokens spent on conversational filler — the loop driver is reading the
+ * output, not a human.
+ */
+export const TONE = `## Tone
+
+Answer only in technical, objective, and concise terms. Eliminate all conversational filler, pleasantries, introductory, or concluding remarks. No "Sure!", "Of course!", "Let me ...", "Done!", "All set!", emoji, or recap of what you just said. Just the work and the facts.
+`;
+
 export const PLAN_PROMPT = `---
 description: Collaborative planning to create specs and work items
 ---
+
+${TONE}
 
 ## Your Role
 
@@ -64,6 +76,8 @@ export function buildImplementPrompt(item: WorkItem): string {
 description: Implement a single work item assigned by the loop driver
 ---
 
+${TONE}
+
 Study AGENTS.md for guidelines.
 
 ## Your task
@@ -112,6 +126,8 @@ export const REVIEW_INTAKE_PROMPT = `---
 description: Process specd_review.yaml entries and move to work list
 ---
 
+${TONE}
+
 Study AGENTS.md for guidelines.
 
 Process specd_review.yaml — convert decided findings into work items or spec changes.
@@ -152,6 +168,8 @@ After processing all decided findings:
 export const AUDIT_PROMPT = `---
 description: Audit specs in the work list against code
 ---
+
+${TONE}
 
 Study AGENTS.md for guidelines.
 

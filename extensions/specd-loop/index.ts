@@ -38,9 +38,9 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand('specd:migrate', {
     description: 'Migrate from nhalm/specd format to specd-loop format',
     async handler(_args, ctx) {
-      const result = await runMigrate(ctx);
+      const result = await runMigrate(pi, ctx);
 
-      if (!result.success) {
+      if (!result.success && !result.aborted) {
         ctx.ui.notify('Migration failed. Check output above for details.', 'error');
       }
     },
@@ -89,7 +89,7 @@ export default function (pi: ExtensionAPI) {
     description: 'Create or update specs and work items',
     async handler(_args, ctx) {
       if (!(await preflight(ctx))) return;
-      await runPlan(ctx);
+      runPlan(pi, ctx);
     },
   });
 

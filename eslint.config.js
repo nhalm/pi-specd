@@ -49,6 +49,13 @@ export default tseslint.config(
     },
   },
   {
-    ignores: ['**/dist/**', '**/node_modules/**'],
+    // Smoke-test scripts and the standalone .mjs viewer run with Node directly
+    // and aren't typechecked alongside the TypeScript sources.
+    ignores: [
+      '**/dist/**',
+      '**/node_modules/**',
+      'scripts/smoke-*.mjs',
+      'extensions/specd-loop/src/viewer.mjs',
+    ],
   },
 );
