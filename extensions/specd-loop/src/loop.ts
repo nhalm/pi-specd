@@ -118,8 +118,16 @@ async function runPhase(
 ): Promise<{ status: 'ok' | 'abort'; result: Awaited<ReturnType<typeof runAgentSession>> }> {
   const controller = new AbortController();
   ctrlC.setController(controller);
-  const result = await runAgentSession(ctx.cwd, prompt, { ...opts, signal: controller.signal });
-  ctrlC.setController(null);
+  // try/finally so a Ctrl+C arriving between the `await` resolving and the
+  // null-assignment can't fire against an already-finished controller. The
+  // agent-runner currently no-ops on a post-completion abort, but relying on
+  // that is brittle — clear the controller eagerly instead.
+  let result: Awaited<ReturnType<typeof runAgentSession>>;
+  try {
+    result = await runAgentSession(ctx.cwd, prompt, { ...opts, signal: controller.signal });
+  } finally {
+    ctrlC.setController(null);
+  }
   if (!result.aborted) return { status: 'ok', result };
   // User Ctrl+C'd this phase. Ask whether to keep going.
   const cont = await ctx.ui.confirm(
