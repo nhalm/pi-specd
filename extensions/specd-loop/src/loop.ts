@@ -93,7 +93,15 @@ export async function runLoop(
   } catch (err) {
     clearWidget(ctx);
     const msg = err instanceof Error ? err.message : String(err);
-    sendProgress(pi, 'error', `Loop halted: ${msg}`);
+    // Worklist/review YAML loaders throw "Failed to read …" / "Failed to
+    // parse … as YAML: …" — those messages are already self-describing, so
+    // the generic "Loop halted: " prefix would just be redundant. Surface
+    // them as-is and append a recovery hint instead.
+    if (msg.startsWith('Failed to read') || msg.startsWith('Failed to parse')) {
+      sendProgress(pi, 'error', `${msg}\nFix the YAML and re-run /specd:loop.`);
+    } else {
+      sendProgress(pi, 'error', `Loop halted: ${msg}`);
+    }
   } finally {
     // Each phase releases its own controller; no global setController(null)
     // needed here. Just detach the terminal-input listener so further Ctrl+C
