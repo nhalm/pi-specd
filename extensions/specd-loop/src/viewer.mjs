@@ -244,10 +244,13 @@ function firstLine(text) {
   return idx === -1 ? text : text.slice(0, idx);
 }
 
-const stream = createReadStream(eventsFifo);
+// utf-8 encoding so multi-byte sequences split across chunk boundaries are
+// stitched back together by Node's StringDecoder; otherwise JSON.parse silently
+// fails on the corrupted line and we drop a real event.
+const stream = createReadStream(eventsFifo, { encoding: 'utf-8' });
 let buffer = '';
 stream.on('data', (chunk) => {
-  buffer += chunk.toString();
+  buffer += chunk;
   let nl;
   while ((nl = buffer.indexOf('\n')) !== -1) {
     const line = buffer.slice(0, nl);
