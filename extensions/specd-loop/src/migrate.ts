@@ -124,31 +124,30 @@ export async function runMigrate(
   const ctrlC = abortOnCtrlC(ctx);
   const controller = new AbortController();
   ctrlC.setController(controller);
-  const result = await (async (): Promise<AgentRunResult> => {
-    try {
-      return await runAgentSession(cwd, MIGRATE_PROMPT, {
-        onEvent: viewer
-          ? (e) => {
-              viewer.send(e);
-            }
-          : undefined,
-        onLogUpdate: viewer
-          ? undefined
-          : (lines) => {
-              ui.setWidget('specd-activity', ['Migrating', ...lines]);
-            },
-        signal: controller.signal,
-        attachInput: viewer ? (steer) => viewer.onInput(steer) : undefined,
-      });
-    } finally {
-      ctrlC.setController(null);
-      ctrlC.unsubscribe();
-      // Once the migration is done (or aborted), the side pane is gone — the
-      // parent agent will deliver any news from here on.
-      if (viewer) await viewer.close({ kill: true });
-      else ui.setWidget('specd-activity', undefined);
-    }
-  })();
+  let result: AgentRunResult;
+  try {
+    result = await runAgentSession(cwd, MIGRATE_PROMPT, {
+      onEvent: viewer
+        ? (e) => {
+            viewer.send(e);
+          }
+        : undefined,
+      onLogUpdate: viewer
+        ? undefined
+        : (lines) => {
+            ui.setWidget('specd-activity', ['Migrating', ...lines]);
+          },
+      signal: controller.signal,
+      attachInput: viewer ? (steer) => viewer.onInput(steer) : undefined,
+    });
+  } finally {
+    ctrlC.setController(null);
+    ctrlC.unsubscribe();
+    // Once the migration is done (or aborted), the side pane is gone — the
+    // parent agent will deliver any news from here on.
+    if (viewer) await viewer.close({ kill: true });
+    else ui.setWidget('specd-activity', undefined);
+  }
 
   if (result.aborted) {
     ui.notify('Migration aborted by user.', 'warning');
