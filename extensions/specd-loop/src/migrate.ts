@@ -141,9 +141,9 @@ export async function runMigrate(
   const runOpts: RunAgentOptions = viewer
     ? {
         display: {
-          kind: 'events',
-          onEvent: (e) => {
-            viewer.send(e);
+          kind: 'frames',
+          onFrame: (frame) => {
+            viewer.send(frame);
           },
         },
         interactive: { attachInput: (steer) => viewer.onInput(steer) },

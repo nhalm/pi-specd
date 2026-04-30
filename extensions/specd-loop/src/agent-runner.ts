@@ -1,7 +1,14 @@
 import { appendFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 
-import { createAgentSession, type AgentSessionEvent } from '@mariozechner/pi-coding-agent';
+import { createAgentSession } from '@mariozechner/pi-coding-agent';
+
+import {
+  eventToFrames,
+  truncate,
+  type ActivityFrame,
+  type FrameContext,
+} from './activity-frame.js';
 
 /**
  * Outcome of a single sub-agent run. The `kind` discriminator replaces the
@@ -17,7 +24,7 @@ export type AgentRunResult =
 
 /**
  * How the runner surfaces sub-agent activity to the user. Modeled as a
- * tagged union so the two render paths (rolling-log widget vs live event
+ * tagged union so the two render paths (rolling-log widget vs live frame
  * stream to a side viewer) are mutually exclusive — previously a caller
  * could pass both `onLogUpdate` and `onEvent` and the runner would dutifully
  * fire both, which had no use case and just hid bugs.
@@ -25,14 +32,14 @@ export type AgentRunResult =
  * - `'log'`: the runner builds a bounded rolling activity log internally
  *   and calls `onUpdate(lines)` whenever it changes. Lines are ordered
  *   oldest → newest. Suited to a compact widget above the editor.
- * - `'events'`: the runner forwards every raw AgentSessionEvent to
- *   `onEvent` so a richer external UI (e.g. the tmux side pane) can
- *   render it however it wants. The internal log is still maintained
- *   for the transcript but no callback fires for it.
+ * - `'frames'`: the runner forwards every `ActivityFrame` to `onFrame` so
+ *   a richer external UI (e.g. the tmux side pane) can render it however
+ *   it wants. The internal transcript is still maintained but no log
+ *   callback fires.
  */
 export type DisplayMode =
   | { kind: 'log'; onUpdate: (lines: string[]) => void }
-  | { kind: 'events'; onEvent: (event: AgentSessionEvent) => void };
+  | { kind: 'frames'; onFrame: (frame: ActivityFrame) => void };
 
 /**
  * Live-input wiring for sub-agents we want to be able to steer mid-run.
@@ -76,7 +83,7 @@ export async function runAgentSession(
 ): Promise<AgentRunResult> {
   const { display, interactive, signal: callerSignal } = options;
   const onLogUpdate = display?.kind === 'log' ? display.onUpdate : undefined;
-  const onEvent = display?.kind === 'events' ? display.onEvent : undefined;
+  const onFrame = display?.kind === 'frames' ? display.onFrame : undefined;
   const attachInput = interactive?.attachInput;
   // Always work against an AbortSignal so `signal.aborted` is the single
   // source of truth for "was this run cancelled". If the caller didn't pass
@@ -90,12 +97,14 @@ export async function runAgentSession(
   // tripping a temporal-dead-zone ReferenceError if it fires synchronously.
   const transcript: string[] = [];
   const entries: Entry[] = [];
-  // Args aren't carried on tool_execution_end, so remember them from _start.
-  const toolArgs = new Map<string, string>();
   // Streaming text/thinking gets coalesced into a single multi-line entry.
   let streamingKind: 'text' | 'thinking' | null = null;
   let streamingBuffer = '';
   let streamingEntry: Entry | null = null;
+  // Per-run frame context for eventToFrames. Stays alive across the full
+  // session so tool_execution_start summaries can be remembered for the
+  // matching tool_execution_end (pi events don't carry args on _end).
+  const frameCtx: FrameContext = { previousArgsSummary: new Map() };
 
   // Restrict the sub-agent to the standard built-in tools. Without this, pi
   // auto-discovers user-installed extensions (e.g. @mjakl/pi-subagent) and
@@ -256,16 +265,66 @@ export async function runAgentSession(
     emit();
   };
 
+  /**
+   * Drive the widget log from a single ActivityFrame. The viewer pane
+   * consumes frames separately via `onFrame` — both paths see the same
+   * stream, just rendered differently. Frame kinds the widget doesn't use
+   * (banner/control) and any future variants fall through harmlessly.
+   */
+  const consumeFrameForWidget = (frame: ActivityFrame): void => {
+    switch (frame.kind) {
+      case 'tool-start': {
+        const line = `[run] ${frame.toolName}${frame.argsSummary ? `: ${frame.argsSummary}` : ''}`;
+        transcript.push(`${line}\n`);
+        startTool(frame.toolCallId, line);
+        return;
+      }
+      case 'tool-end': {
+        // Note: a tool returning isError is NOT a session failure. Bash
+        // commands exit non-zero all the time (e.g. `ls missing || echo …`),
+        // and the agent recovers naturally. Only crashes / unhandled
+        // rejections / aborts mark the run as failed.
+        const status = frame.isError ? '[err]' : '[ok]';
+        const line = `${status} ${frame.toolName}${frame.resultSnippet ? ` -> ${frame.resultSnippet}` : ''}`;
+        transcript.push(`${line}\n`);
+        finishTool(frame.toolCallId, line);
+        return;
+      }
+      case 'message-update': {
+        if (frame.thinkingDelta) updateStreaming('thinking', frame.thinkingDelta);
+        else if (frame.textDelta) updateStreaming('text', frame.textDelta);
+        return;
+      }
+      case 'message-end': {
+        if (frame.finalText) transcript.push(`\n${frame.finalText}\n`);
+        return;
+      }
+      case 'agent-end':
+        pushNote('done');
+        return;
+      case 'note':
+        pushNote(frame.text);
+        return;
+      case 'message-start':
+      case 'tool-update':
+      case 'banner':
+      case 'control':
+        // Widget-irrelevant frames; the viewer pane handles these.
+        return;
+      default:
+        // Forward-compat: future ActivityFrame variants render as a no-op
+        // here so a pi update that ships new event types doesn't crash the
+        // widget. The frame still reaches `onFrame` for the viewer.
+        return;
+    }
+  };
+
   const unsubscribe = session.subscribe((event) => {
-    onEvent?.(event);
-    handleEvent(event, {
-      transcript,
-      pushNote,
-      startTool,
-      finishTool,
-      updateStreaming,
-      toolArgs,
-    });
+    const frames = eventToFrames(event, frameCtx);
+    for (const frame of frames) {
+      onFrame?.(frame);
+      consumeFrameForWidget(frame);
+    }
   });
 
   try {
@@ -291,161 +350,4 @@ export async function runAgentSession(
     unsubscribe();
     session.dispose();
   }
-}
-
-interface EventCtx {
-  transcript: string[];
-  pushNote: (line: string) => void;
-  startTool: (id: string, line: string) => void;
-  finishTool: (id: string, line: string) => void;
-  updateStreaming: (kind: 'text' | 'thinking', delta: string) => void;
-  toolArgs: Map<string, string>;
-}
-
-function handleEvent(event: AgentSessionEvent, c: EventCtx) {
-  switch (event.type) {
-    case 'tool_execution_start': {
-      const summary = summarizeToolArgs(event.toolName, event.args);
-      c.toolArgs.set(event.toolCallId, summary);
-      const line = `[run] ${event.toolName}${summary ? `: ${summary}` : ''}`;
-      c.transcript.push(`${line}\n`);
-      c.startTool(event.toolCallId, line);
-      break;
-    }
-    case 'tool_execution_end': {
-      const summary = c.toolArgs.get(event.toolCallId) ?? '';
-      const resultSnippet = stringifyToolResult(event.result);
-      const status = event.isError ? '[err]' : '[ok]';
-      const line = `${status} ${event.toolName}${summary ? `: ${summary}` : ''}${
-        resultSnippet ? ` -> ${resultSnippet}` : ''
-      }`;
-      c.transcript.push(`${line}\n`);
-      c.finishTool(event.toolCallId, line);
-      c.toolArgs.delete(event.toolCallId);
-      // Note: a tool returning isError is NOT a session failure. Bash
-      // commands exit non-zero all the time (e.g. `ls missing || echo …`),
-      // and the agent recovers naturally. Only crashes / unhandled
-      // rejections / aborts mark the run as failed.
-      break;
-    }
-    case 'message_update': {
-      const sub = event.assistantMessageEvent;
-      switch (sub.type) {
-        case 'thinking_delta':
-          c.updateStreaming('thinking', getDelta(sub));
-          break;
-        case 'text_delta':
-          c.updateStreaming('text', getDelta(sub));
-          break;
-      }
-      break;
-    }
-    case 'message_end': {
-      const text = extractMessageText(event.message);
-      if (text) c.transcript.push(`\n${text}\n`);
-      break;
-    }
-    case 'agent_end':
-      c.pushNote('done');
-      break;
-    case 'compaction_start':
-      c.pushNote('[compacting context...]');
-      break;
-    case 'compaction_end':
-      c.pushNote('[compaction complete]');
-      break;
-    case 'auto_retry_start': {
-      const detail = event.errorMessage ? `: ${firstLine(event.errorMessage)}` : '';
-      c.pushNote(`[retrying after API error${detail}]`);
-      break;
-    }
-    case 'auto_retry_end':
-      // No note — the next message_update / turn_end will speak for itself.
-      break;
-    default:
-      // Other AgentSessionEvent variants (turn_start, turn_end, agent_start,
-      // message_start, tool_execution_update, queue_update,
-      // session_info_changed, …) are intentionally ignored — they don't map
-      // to a useful side-pane line. The union is open from pi's side, so we
-      // don't use an exhaustiveness check here.
-      break;
-  }
-}
-
-function getDelta(event: unknown): string {
-  if (!event || typeof event !== 'object') return '';
-  const e = event as Record<string, unknown>;
-  if (typeof e.delta === 'string') return e.delta;
-  if (typeof e.text === 'string') return e.text;
-  if (typeof e.thinking === 'string') return e.thinking;
-  return '';
-}
-
-function extractMessageText(message: unknown): string {
-  if (!message || typeof message !== 'object') return '';
-  const m = message as { role?: string; content?: unknown };
-  if (m.role !== 'assistant' || !Array.isArray(m.content)) return '';
-  const parts: string[] = [];
-  for (const block of m.content) {
-    if (block && typeof block === 'object') {
-      const b = block as { type?: string; text?: unknown };
-      if (b.type === 'text' && typeof b.text === 'string') parts.push(b.text);
-    }
-  }
-  return parts.join('');
-}
-
-function stringifyToolResult(result: unknown): string {
-  if (typeof result === 'string') return truncate(firstLine(result), 80);
-  if (result && typeof result === 'object') {
-    const r = result as { content?: unknown };
-    if (Array.isArray(r.content)) {
-      for (const block of r.content) {
-        if (block && typeof block === 'object') {
-          const b = block as { type?: string; text?: unknown };
-          if (b.type === 'text' && typeof b.text === 'string') {
-            return truncate(firstLine(b.text), 80);
-          }
-        }
-      }
-    }
-  }
-  return '';
-}
-
-function firstLine(s: string): string {
-  const idx = s.indexOf('\n');
-  return (idx === -1 ? s : s.slice(0, idx)).trim();
-}
-
-function summarizeToolArgs(toolName: string, args: unknown): string {
-  if (!args || typeof args !== 'object') return '';
-  const a = args as Record<string, unknown>;
-  switch (toolName.toLowerCase()) {
-    case 'bash': {
-      const cmd = typeof a.command === 'string' ? a.command : '';
-      return truncate(cmd.replace(/\s+/g, ' ').trim(), 80);
-    }
-    case 'read':
-    case 'write':
-    case 'edit':
-    case 'multiedit': {
-      const path =
-        typeof a.file_path === 'string' ? a.file_path : typeof a.path === 'string' ? a.path : '';
-      return truncate(path, 80);
-    }
-    case 'glob':
-    case 'grep':
-      return truncate(typeof a.pattern === 'string' ? a.pattern : '', 80);
-    default:
-      for (const [k, v] of Object.entries(a)) {
-        if (typeof v === 'string') return `${k}=${truncate(v, 60)}`;
-      }
-      return '';
-  }
-}
-
-function truncate(s: string, max: number): string {
-  if (s.length <= max) return s;
-  return `${s.slice(0, max - 1)}…`;
 }

@@ -6,11 +6,11 @@ import { join, resolve, dirname } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
-import type { AgentSessionEvent } from '@mariozechner/pi-coding-agent';
+import type { ActivityFrame } from './activity-frame.js';
 
 export interface ViewerHandle {
-  /** Forward a session event to the viewer. */
-  send: (event: AgentSessionEvent) => void;
+  /** Forward an ActivityFrame to the viewer. */
+  send: (frame: ActivityFrame) => void;
   /**
    * Update the banner pinned at the top of the viewer pane. The viewer
    * displays `specd · <title> — type below to steer the sub-agent`. Used by
@@ -312,17 +312,17 @@ export async function spawnViewerPane(opts?: {
   };
 
   // Push the spawn-time title to the viewer immediately so the banner
-  // identifies the pane before any session events arrive.
+  // identifies the pane before any frames arrive.
   if (opts?.title) {
-    writeLine({ type: 'specd:title', title: opts.title });
+    writeLine({ kind: 'control', subtype: 'specd:title', title: opts.title });
   }
 
   return {
-    send: (event) => {
-      writeLine(event);
+    send: (frame) => {
+      writeLine(frame);
     },
     setTitle: (title) => {
-      writeLine({ type: 'specd:title', title });
+      writeLine({ kind: 'control', subtype: 'specd:title', title });
     },
     onInput: (handler) => {
       inputHandlers.add(handler);
