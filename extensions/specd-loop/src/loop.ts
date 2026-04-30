@@ -81,7 +81,9 @@ export async function runLoop(
     const msg = err instanceof Error ? err.message : String(err);
     sendProgress(pi, 'error', `Loop halted: ${msg}`);
   } finally {
-    ctrlC.setController(null);
+    // Each phase releases its own controller; no global setController(null)
+    // needed here. Just detach the terminal-input listener so further Ctrl+C
+    // keystrokes don't fire stale aborts.
     ctrlC.unsubscribe();
     // Kill the pane immediately if the user aborted; otherwise leave it open
     // so they can scroll back through the run.
@@ -117,16 +119,16 @@ async function runPhase(
   phaseLabel: string,
 ): Promise<{ status: 'ok' | 'abort'; result: Awaited<ReturnType<typeof runAgentSession>> }> {
   const controller = new AbortController();
-  ctrlC.setController(controller);
+  const release = ctrlC.bind(controller);
   // try/finally so a Ctrl+C arriving between the `await` resolving and the
-  // null-assignment can't fire against an already-finished controller. The
+  // release can't fire against an already-finished controller. The
   // agent-runner currently no-ops on a post-completion abort, but relying on
-  // that is brittle — clear the controller eagerly instead.
+  // that is brittle — release eagerly instead.
   let result: Awaited<ReturnType<typeof runAgentSession>>;
   try {
     result = await runAgentSession(ctx.cwd, prompt, { ...opts, signal: controller.signal });
   } finally {
-    ctrlC.setController(null);
+    release();
   }
   if (!result.aborted) return { status: 'ok', result };
   // User Ctrl+C'd this phase. Ask whether to keep going.

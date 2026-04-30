@@ -123,7 +123,7 @@ export async function runMigrate(
   const viewer = await spawnViewerPane({ title: 'migration' });
   const ctrlC = abortOnCtrlC(ctx);
   const controller = new AbortController();
-  ctrlC.setController(controller);
+  const release = ctrlC.bind(controller);
   let result: AgentRunResult;
   try {
     result = await runAgentSession(cwd, MIGRATE_PROMPT, {
@@ -141,7 +141,7 @@ export async function runMigrate(
       attachInput: viewer ? (steer) => viewer.onInput(steer) : undefined,
     });
   } finally {
-    ctrlC.setController(null);
+    release();
     ctrlC.unsubscribe();
     // Once the migration is done (or aborted), the side pane is gone — the
     // parent agent will deliver any news from here on.

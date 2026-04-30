@@ -3,18 +3,19 @@ import { Key, matchesKey } from '@mariozechner/pi-tui';
 
 export interface CtrlCWatcher {
   /**
-   * Set the AbortController that Ctrl+C should abort. Pass null while no
-   * sub-agent is active (e.g. during a confirm dialog) so keystrokes don't
-   * abort anything stale.
+   * Attach an AbortController so Ctrl+C will abort it. Returns a release
+   * function — call it (e.g. in a `finally`) to detach the controller.
+   * Calling `bind()` while another controller is bound replaces it; the
+   * release fn for the displaced controller becomes a no-op.
    */
-  setController: (controller: AbortController | null) => void;
-  /** Detach the terminal input listener. */
+  bind: (controller: AbortController) => () => void;
+  /** Detach the terminal-input listener; no further Ctrl+C aborts will fire. */
   unsubscribe: () => void;
 }
 
 /**
  * Watch terminal input for Ctrl+C and abort whichever AbortController is
- * currently active. Loop drives this pattern so each phase gets a fresh
+ * currently bound. Loop drives this pattern so each phase gets a fresh
  * controller and Ctrl+C only aborts the in-flight sub-agent, not the
  * entire loop.
  *
@@ -36,8 +37,14 @@ export function abortOnCtrlC(ctx: ExtensionCommandContext): CtrlCWatcher {
     }
   });
   return {
-    setController: (c) => {
+    bind: (c) => {
       current = c;
+      // The release fn only clears `current` if it still points at the
+      // controller we bound. If a later bind() displaced it, the release is
+      // a no-op so the active controller isn't accidentally detached.
+      return () => {
+        if (current === c) current = null;
+      };
     },
     unsubscribe: off,
   };
