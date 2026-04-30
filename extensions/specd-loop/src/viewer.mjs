@@ -10,7 +10,7 @@
 
 import { createReadStream, createWriteStream } from 'node:fs';
 
-import { ProcessTerminal, TUI, Container, Input, Text } from '@mariozechner/pi-tui';
+import { ProcessTerminal, TUI, Container, Input, Spacer, Text } from '@mariozechner/pi-tui';
 import {
   AssistantMessageComponent,
   ToolExecutionComponent,
@@ -32,6 +32,11 @@ const tui = new TUI(term);
 
 const chatContainer = new Container();
 tui.addChild(chatContainer);
+
+// One-row pad so the top-anchored title overlay (which composites OVER content)
+// doesn't cover the first line of the first chat entry. The Spacer is always
+// the leading child of chatContainer; appendToChat preserves that invariant.
+chatContainer.addChild(new Spacer(1));
 
 // Banner pinned to the top via a non-capturing overlay so it stays visible
 // while events scroll below it. Identifies which pane this is and what phase
