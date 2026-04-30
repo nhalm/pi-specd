@@ -3,7 +3,7 @@
 //
 // Usage: node viewer.mjs <events-fifo> <input-fifo>
 //
-// - events-fifo: parent → viewer. Newline-delimited JSON AgentSessionEvent stream.
+// - events-fifo: parent → viewer. Newline-delimited JSON ActivityFrame stream.
 // - input-fifo:  viewer → parent. Newline-delimited JSON-encoded user message strings.
 //                Each line is a JSON-encoded string (e.g. `"hi"\n`); parent calls
 //                session.steer() with the decoded text.
@@ -41,8 +41,8 @@ chatContainer.addChild(new Spacer(1));
 // Banner pinned to the top via a non-capturing overlay so it stays visible
 // while events scroll below it. Identifies which pane this is and what phase
 // is running, so a user with both parent and child panes open can tell at a
-// glance which input box steers the sub-agent. Updated via 'specd:title'
-// control events on the events FIFO.
+// glance which input box steers the sub-agent. Updated via control frames
+// (subtype 'specd:title') on the events FIFO.
 const titleText = new Text('specd');
 tui.showOverlay(titleText, {
   anchor: 'top-left',
@@ -116,25 +116,25 @@ function appendToChat(component) {
   }
 }
 
-function handleEvent(event) {
-  switch (event.type) {
-    case 'message_start':
-      if (event.message?.role === 'assistant') {
+function handleFrame(frame) {
+  switch (frame.kind) {
+    case 'message-start':
+      if (frame.message?.role === 'assistant') {
         streamingAssistant = new AssistantMessageComponent(
           undefined,
           false,
           markdownTheme,
           undefined,
         );
-        streamingAssistant.updateContent(event.message);
+        streamingAssistant.updateContent(frame.message);
         appendToChat(streamingAssistant);
       }
       break;
 
-    case 'message_update':
-      if (streamingAssistant && event.message?.role === 'assistant') {
-        streamingAssistant.updateContent(event.message);
-        for (const block of event.message.content ?? []) {
+    case 'message-update':
+      if (streamingAssistant && frame.message?.role === 'assistant') {
+        streamingAssistant.updateContent(frame.message);
+        for (const block of frame.message.content ?? []) {
           if (!block || block.type !== 'toolCall') continue;
           if (typeof block.id !== 'string') continue;
           if (!pendingTools.has(block.id)) {
@@ -156,92 +156,85 @@ function handleEvent(event) {
       }
       break;
 
-    case 'message_end':
-      if (event.message?.role === 'assistant') {
-        streamingAssistant?.updateContent(event.message);
+    case 'message-end':
+      if (frame.message?.role === 'assistant') {
+        streamingAssistant?.updateContent(frame.message);
         streamingAssistant = null;
         // Match pi's interactive mode: once the assistant message ends, every
         // pending tool's args are final. setArgsComplete() triggers diff
         // computation for edit-style tools so their args render as a diff
-        // instead of raw partial text. Don't clear the map — tool_execution_end
-        // still owns that.
+        // instead of raw partial text. Don't clear the map — tool-end still
+        // owns that.
         for (const component of pendingTools.values()) {
           component.setArgsComplete();
         }
       }
       break;
 
-    case 'tool_execution_start': {
-      let component = pendingTools.get(event.toolCallId);
+    case 'tool-start': {
+      let component = pendingTools.get(frame.toolCallId);
       if (!component) {
         component = new ToolExecutionComponent(
-          event.toolName,
-          event.toolCallId,
-          event.args,
+          frame.toolName,
+          frame.toolCallId,
+          frame.args,
           { showImages: false },
           undefined,
           tui,
           process.cwd(),
         );
         appendToChat(component);
-        pendingTools.set(event.toolCallId, component);
+        pendingTools.set(frame.toolCallId, component);
       }
       component.markExecutionStarted();
       break;
     }
 
-    case 'tool_execution_update': {
-      const component = pendingTools.get(event.toolCallId);
-      if (component && event.partialResult) {
-        component.updateResult(event.partialResult, true);
+    case 'tool-update': {
+      const component = pendingTools.get(frame.toolCallId);
+      if (component && frame.partialResult) {
+        component.updateResult(frame.partialResult, true);
       }
       break;
     }
 
-    case 'tool_execution_end': {
-      const component = pendingTools.get(event.toolCallId);
+    case 'tool-end': {
+      const component = pendingTools.get(frame.toolCallId);
       if (component) {
-        component.updateResult(event.result ?? { content: [], isError: event.isError }, false);
-        pendingTools.delete(event.toolCallId);
+        component.updateResult(frame.result ?? { content: [], isError: frame.isError }, false);
+        pendingTools.delete(frame.toolCallId);
       }
       break;
     }
 
-    case 'agent_end':
+    case 'note':
+      appendToChat(new Text(frame.text));
       break;
 
-    case 'compaction_start':
-      appendToChat(new Text('[compacting context...]'));
+    case 'agent-end':
+      // No banner needed — final message and the eventual FIFO EOF tell the
+      // story. Kept as an explicit case so it doesn't hit the default branch.
       break;
 
-    case 'compaction_end':
-      appendToChat(new Text('[compaction complete]'));
+    case 'banner':
+      // banner frames are reserved for future use; render the title text as a
+      // chat-level banner. Forward-compat: today nothing emits these.
+      appendToChat(new Text(frame.title));
       break;
 
-    case 'auto_retry_start': {
-      const detail =
-        typeof event.errorMessage === 'string' && event.errorMessage
-          ? `: ${firstLine(event.errorMessage)}`
-          : '';
-      appendToChat(new Text(`[retrying after API error${detail}]`));
-      break;
-    }
-
-    case 'auto_retry_end':
-      // No note — the next message_update / turn_end will speak for itself.
+    case 'control':
+      if (frame.subtype === 'specd:title' && typeof frame.title === 'string') {
+        setTitle(frame.title);
+      }
       break;
 
     default:
-      // Other AgentSessionEvent variants (turn_start, turn_end, agent_start,
-      // queue_update, session_info_changed, …) are intentionally ignored.
+      // Forward-compat: unknown frame kinds are ignored. A future pi update
+      // may add new ActivityFrame variants and we don't want the viewer to
+      // crash mid-run on a bump.
       break;
   }
   tui.requestRender();
-}
-
-function firstLine(text) {
-  const idx = text.indexOf('\n');
-  return idx === -1 ? text : text.slice(0, idx);
 }
 
 // utf-8 encoding so multi-byte sequences split across chunk boundaries are
@@ -258,14 +251,10 @@ stream.on('data', (chunk) => {
     if (!line) continue;
     try {
       const parsed = JSON.parse(line);
-      if (!parsed || typeof parsed !== 'object' || typeof parsed.type !== 'string') {
+      if (!parsed || typeof parsed !== 'object' || typeof parsed.kind !== 'string') {
         continue;
       }
-      if (parsed.type === 'specd:title' && typeof parsed.title === 'string') {
-        setTitle(parsed.title);
-        continue;
-      }
-      handleEvent(parsed);
+      handleFrame(parsed);
     } catch (err) {
       console.error(`[viewer] parse error: ${err.message}`);
     }
