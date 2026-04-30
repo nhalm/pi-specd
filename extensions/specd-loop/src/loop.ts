@@ -1,11 +1,7 @@
-import type {
-  AgentSessionEvent,
-  ExtensionAPI,
-  ExtensionCommandContext,
-} from '@mariozechner/pi-coding-agent';
+import type { ExtensionAPI, ExtensionCommandContext } from '@mariozechner/pi-coding-agent';
 
 import { abortOnCtrlC, type CtrlCWatcher } from './abort-on-ctrl-c.js';
-import { runAgentSession } from './agent-runner.js';
+import { runAgentSession, type RunAgentOptions } from './agent-runner.js';
 import { getHeadCommit, getNewCommitCount } from './git.js';
 import { logOutput } from './logger.js';
 import { verifyImplementContract } from './loop-verify.js';
@@ -178,18 +174,24 @@ function subAgentOpts(
   ctx: ExtensionCommandContext,
   header: string,
   isViewerClosed: () => boolean,
-) {
+): RunAgentOptions {
   if (viewer && !isViewerClosed()) {
     return {
-      onEvent: (e: AgentSessionEvent) => {
-        viewer.send(e);
+      display: {
+        kind: 'events',
+        onEvent: (e) => {
+          viewer.send(e);
+        },
       },
-      attachInput: (steer: (text: string) => void) => viewer.onInput(steer),
+      interactive: { attachInput: (steer) => viewer.onInput(steer) },
     };
   }
   return {
-    onLogUpdate: (lines: string[]) => {
-      ctx.ui.setWidget('specd-activity', [header, ...lines]);
+    display: {
+      kind: 'log',
+      onUpdate: (lines) => {
+        ctx.ui.setWidget('specd-activity', [header, ...lines]);
+      },
     },
   };
 }

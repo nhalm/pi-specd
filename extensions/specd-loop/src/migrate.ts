@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import type { ExtensionAPI, ExtensionCommandContext } from '@mariozechner/pi-coding-agent';
 
 import { abortOnCtrlC } from './abort-on-ctrl-c.js';
-import { runAgentSession, type AgentRunResult } from './agent-runner.js';
+import { runAgentSession, type AgentRunResult, type RunAgentOptions } from './agent-runner.js';
 import { TONE } from './prompts.js';
 import { EXTENSION_VERSION } from './version.js';
 import { spawnViewerPane } from './viewer-host.js';
@@ -136,22 +136,31 @@ export async function runMigrate(
   const ctrlC = abortOnCtrlC(ctx);
   const controller = new AbortController();
   const release = ctrlC.bind(controller);
-  let result: AgentRunResult;
-  try {
-    result = await runAgentSession(cwd, MIGRATE_PROMPT, {
-      onEvent: viewer
-        ? (e) => {
+  // Build the runner options up-front so the display/interactive shapes are
+  // constructed once (and visibly typed) rather than inlined in the call.
+  const runOpts: RunAgentOptions = viewer
+    ? {
+        display: {
+          kind: 'events',
+          onEvent: (e) => {
             viewer.send(e);
-          }
-        : undefined,
-      onLogUpdate: viewer
-        ? undefined
-        : (lines) => {
+          },
+        },
+        interactive: { attachInput: (steer) => viewer.onInput(steer) },
+        signal: controller.signal,
+      }
+    : {
+        display: {
+          kind: 'log',
+          onUpdate: (lines) => {
             ui.setWidget('specd-activity', ['Migrating', ...lines]);
           },
-      signal: controller.signal,
-      attachInput: viewer ? (steer) => viewer.onInput(steer) : undefined,
-    });
+        },
+        signal: controller.signal,
+      };
+  let result: AgentRunResult;
+  try {
+    result = await runAgentSession(cwd, MIGRATE_PROMPT, runOpts);
   } finally {
     release();
     ctrlC.unsubscribe();

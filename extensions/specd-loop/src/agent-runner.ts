@@ -15,31 +15,44 @@ export type AgentRunResult =
   | { kind: 'aborted'; output: string }
   | { kind: 'error'; output: string; error?: unknown };
 
+/**
+ * How the runner surfaces sub-agent activity to the user. Modeled as a
+ * tagged union so the two render paths (rolling-log widget vs live event
+ * stream to a side viewer) are mutually exclusive — previously a caller
+ * could pass both `onLogUpdate` and `onEvent` and the runner would dutifully
+ * fire both, which had no use case and just hid bugs.
+ *
+ * - `'log'`: the runner builds a bounded rolling activity log internally
+ *   and calls `onUpdate(lines)` whenever it changes. Lines are ordered
+ *   oldest → newest. Suited to a compact widget above the editor.
+ * - `'events'`: the runner forwards every raw AgentSessionEvent to
+ *   `onEvent` so a richer external UI (e.g. the tmux side pane) can
+ *   render it however it wants. The internal log is still maintained
+ *   for the transcript but no callback fires for it.
+ */
+export type DisplayMode =
+  | { kind: 'log'; onUpdate: (lines: string[]) => void }
+  | { kind: 'events'; onEvent: (event: AgentSessionEvent) => void };
+
+/**
+ * Live-input wiring for sub-agents we want to be able to steer mid-run.
+ * The runner invokes `attachInput(steer)` once the session is created and
+ * passes a `steer(text)` function that queues user input into the live
+ * session. The caller returns a detacher the runner calls when the session
+ * ends so any input subscription can be cleaned up.
+ */
+export interface InteractiveOptions {
+  attachInput: (steer: (text: string) => void) => () => void;
+}
+
 export interface RunAgentOptions {
-  /**
-   * Called whenever the activity log changes — pass these lines to a widget so
-   * the user can see what the sub-agent is actually doing. Lines are ordered
-   * oldest → newest. Total flattened lines stay roughly bounded but each entry
-   * (e.g. a streaming assistant message) can occupy multiple lines.
-   */
-  onLogUpdate?: (lines: string[]) => void;
-  /**
-   * Called for every raw AgentSessionEvent. Used to forward the live event
-   * stream to a side viewer (e.g. a tmux pane running viewer.mjs).
-   */
-  onEvent?: (event: AgentSessionEvent) => void;
+  display?: DisplayMode;
+  interactive?: InteractiveOptions;
   /**
    * AbortSignal that, when triggered, calls session.abort() to stop the
-   * running sub-agent. The returned result has `aborted: true`.
+   * running sub-agent. The returned result has `kind: 'aborted'`.
    */
   signal?: AbortSignal;
-  /**
-   * Setup callback fired once the AgentSession is created. Caller receives
-   * a `steer(text)` function that injects user input into the live session
-   * (interrupting the current turn). The returned function is called when
-   * the session ends — caller uses it to detach any input subscription.
-   */
-  attachInput?: (steer: (text: string) => void) => () => void;
 }
 
 const MAX_ENTRIES = 6;
@@ -61,7 +74,10 @@ export async function runAgentSession(
   prompt: string,
   options: RunAgentOptions = {},
 ): Promise<AgentRunResult> {
-  const { onLogUpdate, onEvent, signal, attachInput } = options;
+  const { display, interactive, signal } = options;
+  const onLogUpdate = display?.kind === 'log' ? display.onUpdate : undefined;
+  const onEvent = display?.kind === 'events' ? display.onEvent : undefined;
+  const attachInput = interactive?.attachInput;
 
   // All local state declared up front so any callback wired below (debug
   // loggers, abort handlers, process listeners) can reference these without
