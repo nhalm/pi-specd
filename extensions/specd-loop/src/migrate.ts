@@ -4,8 +4,9 @@ import { resolve } from 'node:path';
 import type { ExtensionAPI, ExtensionCommandContext } from '@mariozechner/pi-coding-agent';
 
 import { abortOnCtrlC } from './abort-on-ctrl-c.js';
-import { runAgentSession, type AgentRunResult, type RunAgentOptions } from './agent-runner.js';
+import { type AgentRunResult } from './agent-runner.js';
 import { TONE } from './prompts.js';
+import { runOneShot } from './run-one-shot.js';
 import { EXTENSION_VERSION } from './version.js';
 import { spawnViewerPane } from './viewer-host.js';
 
@@ -134,41 +135,22 @@ export async function runMigrate(
     );
   });
   const ctrlC = abortOnCtrlC(ctx);
-  const controller = new AbortController();
-  const release = ctrlC.bind(controller);
-  // Build the runner options up-front so the display/interactive shapes are
-  // constructed once (and visibly typed) rather than inlined in the call.
-  const runOpts: RunAgentOptions = viewer
-    ? {
-        display: {
-          kind: 'frames',
-          onFrame: (frame) => {
-            viewer.send(frame);
-          },
-        },
-        interactive: { attachInput: (steer) => viewer.onInput(steer) },
-        signal: controller.signal,
-      }
-    : {
-        display: {
-          kind: 'log',
-          onUpdate: (lines) => {
-            ui.setWidget('specd-activity', ['Migrating', ...lines]);
-          },
-        },
-        signal: controller.signal,
-      };
   let result: AgentRunResult;
   try {
-    result = await runAgentSession(cwd, MIGRATE_PROMPT, runOpts);
+    result = await runOneShot(ctx, {
+      prompt: MIGRATE_PROMPT,
+      label: 'migration',
+      viewer,
+      isViewerClosed: false,
+      ctrlC,
+    });
   } finally {
-    release();
     ctrlC.unsubscribe();
     releaseClose?.();
     // Once the migration is done (or aborted), the side pane is gone — the
-    // parent agent will deliver any news from here on.
+    // parent agent will deliver any news from here on. runOneShot already
+    // clears the activity widget in widget-mode runs.
     if (viewer) await viewer.close({ kill: true });
-    else ui.setWidget('specd-activity', undefined);
   }
 
   if (result.kind === 'aborted') {
