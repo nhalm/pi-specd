@@ -1,15 +1,17 @@
 import type { ExtensionAPI, ExtensionCommandContext } from '@mariozechner/pi-coding-agent';
 
 import { abortOnCtrlC, type CtrlCWatcher } from './abort-on-ctrl-c.js';
-import { runAgentSession, type RunAgentOptions } from './agent-runner.js';
 import { getHeadCommit, getNewCommitCount } from './git.js';
 import { logOutput } from './logger.js';
 import { verifyImplementContract } from './loop-verify.js';
 import { spawnViewerPane, type ViewerHandle } from './viewer-host.js';
+import { type Phase } from './phase.js';
 import { buildImplementPrompt, REVIEW_INTAKE_PROMPT, AUDIT_PROMPT } from './prompts.js';
 import { loadReviewList, getUndecided } from './review.js';
+import { runOneShot } from './run-one-shot.js';
 import { sendProgress, surfaceReviewItems } from './ui.js';
 import { showWidget, clearWidget } from './widget.js';
+import type { WorkItem } from './types.js';
 import {
   loadWorkList,
   saveWorkList,
@@ -145,29 +147,33 @@ type PhaseOutcome =
   | { kind: 'error'; output: string; error?: unknown };
 
 /**
- * Run a sub-agent and, if the user Ctrl+C's it, ask whether to keep going.
- * Translates the underlying AgentRunResult into a PhaseOutcome that bakes
- * the user's continue-or-stop decision into the discriminator.
+ * Mutable per-run state shared across phases: the viewer pane (or null
+ * outside tmux), a function that reports whether the pane has been closed
+ * mid-run, and the Ctrl+C watcher whose binding rotates per phase.
  */
-async function runPhase(
+interface RunState {
+  viewer: ViewerHandle | null;
+  isViewerClosed: () => boolean;
+  ctrlC: CtrlCWatcher;
+}
+
+/**
+ * Run a single phase via runOneShot and translate the AgentRunResult into
+ * a PhaseOutcome. On abort, asks the user whether to keep going so the
+ * driver can decide between skip-and-continue vs stop-the-whole-loop.
+ */
+async function runPhaseOnce(
   ctx: ExtensionCommandContext,
-  ctrlC: CtrlCWatcher,
-  prompt: string,
-  opts: RunAgentOptions,
-  phaseLabel: string,
+  phase: Phase,
+  state: RunState,
 ): Promise<PhaseOutcome> {
-  const controller = new AbortController();
-  const release = ctrlC.bind(controller);
-  // try/finally so a Ctrl+C arriving between the `await` resolving and the
-  // release can't fire against an already-finished controller. The
-  // agent-runner currently no-ops on a post-completion abort, but relying on
-  // that is brittle — release eagerly instead.
-  let result: Awaited<ReturnType<typeof runAgentSession>>;
-  try {
-    result = await runAgentSession(ctx.cwd, prompt, { ...opts, signal: controller.signal });
-  } finally {
-    release();
-  }
+  const result = await runOneShot(ctx, {
+    prompt: phase.prompt,
+    label: phase.label,
+    viewer: state.viewer,
+    isViewerClosed: state.isViewerClosed(),
+    ctrlC: state.ctrlC,
+  });
   switch (result.kind) {
     case 'success':
       return { kind: 'success', output: result.output };
@@ -177,7 +183,7 @@ async function runPhase(
       // User Ctrl+C'd this phase. Ask whether to keep going.
       const cont = await ctx.ui.confirm(
         'Aborted',
-        `${phaseLabel} was interrupted with Ctrl+C. Continue with the loop?`,
+        `${phase.label} was interrupted with Ctrl+C. Continue with the loop?`,
       );
       return cont
         ? { kind: 'aborted-skip', output: result.output }
@@ -186,51 +192,25 @@ async function runPhase(
   }
 }
 
-/**
- * Build the per-phase agent-runner options. If the viewer pane is live we
- * route events to it and accept input back from it; otherwise we render a
- * compact rolling-log widget above the editor.
- *
- * `isViewerClosed` is checked at phase start: if a previous phase saw the
- * pane close, this phase boots in widget mode. Note: once a phase is mid-
- * stream, swapping callbacks doesn't reattach — so a pane closed mid-phase
- * leaves the in-flight phase without a display until the next phase
- * starts. The run continues regardless.
- */
-function subAgentOpts(
-  viewer: ViewerHandle | null,
-  ctx: ExtensionCommandContext,
-  header: string,
-  isViewerClosed: () => boolean,
-): RunAgentOptions {
-  if (viewer && !isViewerClosed()) {
-    return {
-      display: {
-        kind: 'frames',
-        onFrame: (frame) => {
-          viewer.send(frame);
-        },
-      },
-      interactive: { attachInput: (steer) => viewer.onInput(steer) },
-    };
-  }
+function buildCyclePhase(item: WorkItem, cycle: number, max: number): Phase {
   return {
-    display: {
-      kind: 'log',
-      onUpdate: (lines) => {
-        ctx.ui.setWidget('specd-activity', [header, ...lines]);
-      },
-    },
+    label: `cycle ${cycle}/${max}: [${item.spec}] ${item.description}`,
+    prompt: buildImplementPrompt(item),
+    logSlug: `implement-cycle-${cycle}`,
   };
 }
 
-function clearActivityWidget(
-  viewer: ViewerHandle | null,
-  ctx: ExtensionCommandContext,
-  isViewerClosed: () => boolean,
-) {
-  if (!viewer || isViewerClosed()) ctx.ui.setWidget('specd-activity', undefined);
-}
+const intakePhase: Phase = {
+  label: 'review intake',
+  prompt: REVIEW_INTAKE_PROMPT,
+  logSlug: 'review-intake',
+};
+
+const auditPhase: Phase = {
+  label: 'audit',
+  prompt: AUDIT_PROMPT,
+  logSlug: 'audit',
+};
 
 async function runLoopBody(
   pi: ExtensionAPI,
@@ -241,31 +221,24 @@ async function runLoopBody(
   isViewerClosed: () => boolean,
 ): Promise<boolean> {
   const cwd = ctx.cwd;
+  const state: RunState = { viewer, isViewerClosed, ctrlC };
 
   // ─── Phase 1: Review intake ──────────────────────────────
   showWidget(ctx, 'Review Intake', 0, options.maxCycles, 0, 'Running...');
   sendProgress(pi, 'running', 'Running review intake.');
-  viewer?.setTitle('review intake');
-  const intakePhase = await runPhase(
-    ctx,
-    ctrlC,
-    REVIEW_INTAKE_PROMPT,
-    subAgentOpts(viewer, ctx, 'Review intake', isViewerClosed),
-    'Review intake',
-  );
-  clearActivityWidget(viewer, ctx, isViewerClosed);
-  if (intakePhase.kind === 'aborted-stop') {
+  const intakeOutcome = await runPhaseOnce(ctx, intakePhase, state);
+  if (intakeOutcome.kind === 'aborted-stop') {
     clearWidget(ctx);
     sendProgress(pi, 'complete', 'Loop aborted by user.');
     return true;
   }
-  if (intakePhase.kind === 'error') {
-    const intakeLogPath = await logOutput('review-intake', intakePhase.output);
+  if (intakeOutcome.kind === 'error') {
+    const intakeLogPath = await logOutput(intakePhase.logSlug, intakeOutcome.output);
     clearWidget(ctx);
     sendProgress(
       pi,
       'error',
-      `Review intake failed. Full transcript: ${intakeLogPath}${transcriptTail(intakePhase.output)}`,
+      `Review intake failed. Full transcript: ${intakeLogPath}${transcriptTail(intakeOutcome.output)}`,
     );
     return false;
   }
@@ -273,7 +246,7 @@ async function runLoopBody(
   // and 'success' both mean "fall through to the post-intake checks". The
   // skip case just produces an empty/short transcript.
 
-  await logOutput('review-intake', intakePhase.output);
+  await logOutput(intakePhase.logSlug, intakeOutcome.output);
 
   // If the user still has undecided findings (or new ones surfaced during intake), pause.
   const reviewListAfterIntake = await loadReviewList(cwd);
@@ -322,24 +295,12 @@ async function runLoopBody(
       'running',
       `Cycle ${cycle}/${options.maxCycles}: [${item.spec}] ${item.description}`,
     );
-    viewer?.setTitle(`cycle ${cycle}/${options.maxCycles}: [${item.spec}] ${item.description}`);
 
-    const implPhase = await runPhase(
-      ctx,
-      ctrlC,
-      buildImplementPrompt(item),
-      subAgentOpts(
-        viewer,
-        ctx,
-        `Cycle ${cycle}/${options.maxCycles}: [${item.spec}] ${item.description}`,
-        isViewerClosed,
-      ),
-      `Cycle ${cycle}/${options.maxCycles}`,
-    );
-    clearActivityWidget(viewer, ctx, isViewerClosed);
-    const cycleLogPath = await logOutput(`implement-cycle-${cycle}`, implPhase.output);
+    const cyclePhase = buildCyclePhase(item, cycle, options.maxCycles);
+    const cycleOutcome = await runPhaseOnce(ctx, cyclePhase, state);
+    const cycleLogPath = await logOutput(cyclePhase.logSlug, cycleOutcome.output);
 
-    if (implPhase.kind === 'aborted-stop') {
+    if (cycleOutcome.kind === 'aborted-stop') {
       clearWidget(ctx);
       sendProgress(pi, 'complete', `Loop aborted by user during cycle ${cycle}.`);
       return true;
@@ -349,16 +310,16 @@ async function runLoopBody(
     // This is the only call site where 'aborted-skip' literally means "skip
     // and try the next iteration"; review-intake and audit treat it as
     // "fall through" because they have no next iteration to skip to.
-    if (implPhase.kind === 'aborted-skip') {
+    if (cycleOutcome.kind === 'aborted-skip') {
       sendProgress(pi, 'info', `Cycle ${cycle} skipped. Picking up the next item.`);
       continue;
     }
-    if (implPhase.kind === 'error') {
+    if (cycleOutcome.kind === 'error') {
       clearWidget(ctx);
       sendProgress(
         pi,
         'error',
-        `Cycle ${cycle} failed before completion. Full transcript: ${cycleLogPath}${transcriptTail(implPhase.output)}`,
+        `Cycle ${cycle} failed before completion. Full transcript: ${cycleLogPath}${transcriptTail(cycleOutcome.output)}`,
       );
       return false;
     }
@@ -460,16 +421,8 @@ async function runLoopBody(
 
   showWidget(ctx, 'Audit', cycle, options.maxCycles, 0, 'Running...');
   sendProgress(pi, 'running', 'Running audit.');
-  viewer?.setTitle('audit');
-  const auditPhase = await runPhase(
-    ctx,
-    ctrlC,
-    AUDIT_PROMPT,
-    subAgentOpts(viewer, ctx, 'Audit', isViewerClosed),
-    'Audit',
-  );
-  clearActivityWidget(viewer, ctx, isViewerClosed);
-  if (auditPhase.kind === 'aborted-stop') {
+  const auditOutcome = await runPhaseOnce(ctx, auditPhase, state);
+  if (auditOutcome.kind === 'aborted-stop') {
     clearWidget(ctx);
     sendProgress(pi, 'complete', 'Loop aborted by user during audit.');
     return true;
@@ -477,23 +430,23 @@ async function runLoopBody(
   // Audit was Ctrl+C'd but user said keep going. There's nothing after audit,
   // so 'aborted-skip' has no next iteration to skip to — treat it as "audit
   // was effectively cancelled" and exit gracefully without surfacing a failure.
-  if (auditPhase.kind === 'aborted-skip') {
+  if (auditOutcome.kind === 'aborted-skip') {
     clearWidget(ctx);
     sendProgress(pi, 'complete', 'Loop done. Audit skipped via Ctrl+C.');
     return false;
   }
-  if (auditPhase.kind === 'error') {
-    const failedAuditLog = await logOutput('audit', auditPhase.output);
+  if (auditOutcome.kind === 'error') {
+    const failedAuditLog = await logOutput(auditPhase.logSlug, auditOutcome.output);
     clearWidget(ctx);
     sendProgress(
       pi,
       'error',
-      `Audit failed before completion. Full transcript: ${failedAuditLog}${transcriptTail(auditPhase.output)}`,
+      `Audit failed before completion. Full transcript: ${failedAuditLog}${transcriptTail(auditOutcome.output)}`,
     );
     return false;
   }
 
-  await logOutput('audit', auditPhase.output);
+  await logOutput(auditPhase.logSlug, auditOutcome.output);
 
   // If audit raised review items, pause for the user.
   const reviewList = await loadReviewList(cwd);
