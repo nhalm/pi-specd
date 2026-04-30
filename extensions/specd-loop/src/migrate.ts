@@ -121,6 +121,18 @@ export async function runMigrate(
   // In tmux: open a side pane that renders sub-agent activity using pi's own
   // components. Outside tmux: fall back to the rolling-log widget.
   const viewer = await spawnViewerPane({ title: 'migration' });
+  // Migrate is a single sub-agent run, so onClose mid-run can't cleanly
+  // swap to widget mode — record the close and surface a short notice so
+  // the user knows the live view is gone, then let the run finish.
+  let announcedClose = false;
+  const releaseClose = viewer?.onClose(() => {
+    if (announcedClose) return;
+    announcedClose = true;
+    ui.notify(
+      'Side pane closed; migration is still running and will report when finished.',
+      'info',
+    );
+  });
   const ctrlC = abortOnCtrlC(ctx);
   const controller = new AbortController();
   const release = ctrlC.bind(controller);
@@ -143,6 +155,7 @@ export async function runMigrate(
   } finally {
     release();
     ctrlC.unsubscribe();
+    releaseClose?.();
     // Once the migration is done (or aborted), the side pane is gone — the
     // parent agent will deliver any news from here on.
     if (viewer) await viewer.close({ kill: true });

@@ -73,9 +73,23 @@ export async function runLoop(
   // rest of the loop.
   const ctrlC = abortOnCtrlC(ctx);
 
+  // Watch for the user closing the side pane mid-run. Each new phase checks
+  // `viewerClosed` at startup and, if true, boots in widget mode. We don't
+  // try to swap callbacks on an in-flight phase — that phase loses its
+  // display until it ends, but the run keeps going.
+  let viewerClosed = false;
+  let announcedClose = false;
+  const releaseClose = viewer?.onClose(() => {
+    viewerClosed = true;
+    if (!announcedClose) {
+      announcedClose = true;
+      sendProgress(pi, 'info', 'Side pane closed; remaining phases will use the compact log.');
+    }
+  });
+
   let userAborted = false;
   try {
-    userAborted = await runLoopBody(pi, ctx, options, viewer, ctrlC);
+    userAborted = await runLoopBody(pi, ctx, options, viewer, ctrlC, () => viewerClosed);
   } catch (err) {
     clearWidget(ctx);
     const msg = err instanceof Error ? err.message : String(err);
@@ -85,6 +99,7 @@ export async function runLoop(
     // needed here. Just detach the terminal-input listener so further Ctrl+C
     // keystrokes don't fire stale aborts.
     ctrlC.unsubscribe();
+    releaseClose?.();
     // Kill the pane immediately if the user aborted; otherwise leave it open
     // so they can scroll back through the run.
     if (viewer) await viewer.close({ kill: userAborted });
@@ -139,8 +154,24 @@ async function runPhase(
   return { status: cont ? 'ok' : 'abort', result };
 }
 
-function subAgentOpts(viewer: ViewerHandle | null, ctx: ExtensionCommandContext, header: string) {
-  if (viewer) {
+/**
+ * Build the per-phase agent-runner options. If the viewer pane is live we
+ * route events to it and accept input back from it; otherwise we render a
+ * compact rolling-log widget above the editor.
+ *
+ * `isViewerClosed` is checked at phase start: if a previous phase saw the
+ * pane close, this phase boots in widget mode. Note: once a phase is mid-
+ * stream, swapping callbacks doesn't reattach — so a pane closed mid-phase
+ * leaves the in-flight phase without a display until the next phase
+ * starts. The run continues regardless.
+ */
+function subAgentOpts(
+  viewer: ViewerHandle | null,
+  ctx: ExtensionCommandContext,
+  header: string,
+  isViewerClosed: () => boolean,
+) {
+  if (viewer && !isViewerClosed()) {
     return {
       onEvent: (e: AgentSessionEvent) => {
         viewer.send(e);
@@ -155,8 +186,12 @@ function subAgentOpts(viewer: ViewerHandle | null, ctx: ExtensionCommandContext,
   };
 }
 
-function clearActivityWidget(viewer: ViewerHandle | null, ctx: ExtensionCommandContext) {
-  if (!viewer) ctx.ui.setWidget('specd-activity', undefined);
+function clearActivityWidget(
+  viewer: ViewerHandle | null,
+  ctx: ExtensionCommandContext,
+  isViewerClosed: () => boolean,
+) {
+  if (!viewer || isViewerClosed()) ctx.ui.setWidget('specd-activity', undefined);
 }
 
 async function runLoopBody(
@@ -165,6 +200,7 @@ async function runLoopBody(
   options: LoopOptions,
   viewer: ViewerHandle | null,
   ctrlC: CtrlCWatcher,
+  isViewerClosed: () => boolean,
 ): Promise<boolean> {
   const cwd = ctx.cwd;
 
@@ -176,10 +212,10 @@ async function runLoopBody(
     ctx,
     ctrlC,
     REVIEW_INTAKE_PROMPT,
-    subAgentOpts(viewer, ctx, 'Review intake'),
+    subAgentOpts(viewer, ctx, 'Review intake', isViewerClosed),
     'Review intake',
   );
-  clearActivityWidget(viewer, ctx);
+  clearActivityWidget(viewer, ctx, isViewerClosed);
   if (intakePhase.status === 'abort') {
     clearWidget(ctx);
     sendProgress(pi, 'complete', 'Loop aborted by user.');
@@ -256,10 +292,11 @@ async function runLoopBody(
         viewer,
         ctx,
         `Cycle ${cycle}/${options.maxCycles}: [${item.spec}] ${item.description}`,
+        isViewerClosed,
       ),
       `Cycle ${cycle}/${options.maxCycles}`,
     );
-    clearActivityWidget(viewer, ctx);
+    clearActivityWidget(viewer, ctx, isViewerClosed);
     const implResult = implPhase.result;
     const cycleLogPath = await logOutput(`implement-cycle-${cycle}`, implResult.output);
 
@@ -386,10 +423,10 @@ async function runLoopBody(
     ctx,
     ctrlC,
     AUDIT_PROMPT,
-    subAgentOpts(viewer, ctx, 'Audit'),
+    subAgentOpts(viewer, ctx, 'Audit', isViewerClosed),
     'Audit',
   );
-  clearActivityWidget(viewer, ctx);
+  clearActivityWidget(viewer, ctx, isViewerClosed);
   if (auditPhase.status === 'abort') {
     clearWidget(ctx);
     sendProgress(pi, 'complete', 'Loop aborted by user during audit.');
