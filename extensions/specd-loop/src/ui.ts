@@ -25,6 +25,13 @@ export function surfaceReviewItems(pi: ExtensionAPI, cwd: string, findings: Revi
     `${findings.length} review finding(s) need a decision. Edit ${reviewPath} (gitignored, lives only on disk) and add a \`decision:\` line under each finding (see options listed below), then re-run \`/specd:loop\`.`,
   );
 
+  // Each finding card is posted with `triggerTurn: false` because pi's
+  // sendCustomMessage routing (agent-session.js:942-971) only honors the
+  // first triggerTurn while the agent isn't streaming — every subsequent
+  // call sees `isStreaming === true` and silently falls through to
+  // session.steer(), which the user's steering mode may drop entirely.
+  // The leading `sendProgress` call above already triggered one turn for
+  // the summary, which is the only turn we want.
   for (let i = 0; i < findings.length; i++) {
     const item = findings[i];
     pi.sendMessage(
@@ -54,7 +61,7 @@ export function surfaceReviewItems(pi: ExtensionAPI, cwd: string, findings: Revi
         display: true,
         details: { index: i },
       },
-      { triggerTurn: true },
+      { triggerTurn: false },
     );
   }
 }
