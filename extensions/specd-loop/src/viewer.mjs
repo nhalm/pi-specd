@@ -85,14 +85,12 @@ inputBox.onSubmit = (text) => {
   tui.requestRender();
 };
 
-term.start(
-  (data) => {
-    // Forward all input to the focused component (which is the Input box).
-    inputBox.handleInput(data);
-    tui.requestRender();
-  },
-  () => tui.requestRender(true),
-);
+// Let pi-tui drive terminal start: it sets up raw mode, queries cell size,
+// installs the input handler, and dispatches keys through its overlay/focus
+// stack (which includes Kitty key-release filtering, cell-size response
+// consumption, and debug-key dispatch). Forwarding raw bytes straight to
+// inputBox.handleInput would short-circuit all of that.
+tui.start();
 
 const markdownTheme = getMarkdownTheme();
 const pendingTools = new Map();
