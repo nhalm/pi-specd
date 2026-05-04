@@ -92,8 +92,12 @@ inputOverlay.focus();
 const inputWriter = createWriteStream(inputFifo);
 let parentGone = false;
 inputWriter.on('error', () => {
-  // Parent closed the reverse FIFO (session ended). Stop accepting input.
+  // Parent closed the reverse FIFO (session ended) or other write error.
+  // Mark parent gone so we stop accepting input, and destroy the writer to
+  // drain its internal queue and release the fd; not destroying can leak
+  // queued writes as unhandled rejections.
   parentGone = true;
+  inputWriter.destroy();
 });
 inputBox.onSubmit = (text) => {
   const trimmed = text.trim();
