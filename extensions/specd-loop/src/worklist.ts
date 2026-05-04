@@ -1,4 +1,4 @@
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, rename, unlink } from 'node:fs/promises';
 import { resolve, dirname } from 'node:path';
 
 import yaml from 'js-yaml';
@@ -38,7 +38,23 @@ export async function saveWorkList(cwd: string, workList: WorkList): Promise<voi
   const dir = dirname(filePath);
   await mkdir(dir, { recursive: true });
   const content = yaml.dump({ specs: workList.specs }, { indent: 2, lineWidth: -1 });
-  await writeFile(filePath, content, 'utf-8');
+  // Atomic write: writeFile to a sibling temp path, then rename onto the
+  // target. On POSIX, rename(2) is atomic — readers either see the old
+  // content or the full new content, never a partial file. A crash before
+  // the rename leaves the original work list untouched.
+  const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  await writeFile(tmpPath, content, 'utf-8');
+  try {
+    await rename(tmpPath, filePath);
+  } catch (err) {
+    // Best-effort cleanup of the temp file on rename failure.
+    try {
+      await unlink(tmpPath);
+    } catch {
+      /* ignore */
+    }
+    throw err;
+  }
 }
 
 function normalizeWorkList(data: unknown): WorkList {
