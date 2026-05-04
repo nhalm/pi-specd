@@ -271,7 +271,7 @@ function normalizeGitignoreLine(line: string): string {
 
 async function updateGitignore(cwd: string): Promise<boolean> {
   const gitignorePath = resolve(cwd, '.gitignore');
-  const entries = ['.pi-specd', WORK_LIST_FILE, REVIEW_FILE];
+  const entries = ['.pi-specd', WORK_LIST_FILE, REVIEW_FILE, '.specd-loop-checkpoint.json'];
   const existing = existsSync(gitignorePath) ? await readFile(gitignorePath, 'utf-8') : '';
   const existingNormalized = new Set(existing.split('\n').map(normalizeGitignoreLine));
   const missing = entries.filter((e) => !existingNormalized.has(normalizeGitignoreLine(e)));
