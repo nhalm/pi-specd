@@ -23,11 +23,13 @@ Before reporting a finding:
 
 The loop runs autonomously via the `/specd:loop` command. Commands are defined by the specd-loop extension.
 
-| Command         | Purpose                                                   |
-| --------------- | --------------------------------------------------------- |
-| `/specd:loop`   | Run the automated loop: review intake → implement → audit |
-| `/specd:plan`   | Create or update specs and work items                     |
-| `/specd:status` | Show current work list status                             |
+| Command          | Purpose                                                   |
+| ---------------- | --------------------------------------------------------- |
+| `/specd:setup`   | Initialize specd in the project                           |
+| `/specd:migrate` | Migrate from older nhalm/specd format                     |
+| `/specd:loop`    | Run the automated loop: review intake → implement → audit |
+| `/specd:plan`    | Create or update specs and work items                     |
+| `/specd:status`  | Show current work list status                             |
 
 ## Work List
 
@@ -35,7 +37,7 @@ The loop runs autonomously via the `/specd:loop` command. Commands are defined b
 
 - **Planning** writes new items.
 - **Review intake** and **audit** append items derived from decisions or findings.
-- **Implementation** does NOT read or write the work list — the loop driver picks one item and tells the implementer what to work on, then marks it complete after a successful commit.
+- **Implementation** does NOT read or write the work list — the loop driver picks one item and tells the implementer what to work on, then marks it complete after a successful commit. The driver verifies BOTH (a) no new review-finding was appended to `specd_review.yaml` during the cycle AND (b) a new commit actually landed (via `git rev-list HEAD ^${headBefore} --count` ≥ 1, which also rejects an `--amend` of the prior commit). If either gate fails, the item stays incomplete and the loop halts.
 
 Items with a `blocked: <reason>` field are skipped until a planning pass clears the blocker.
 

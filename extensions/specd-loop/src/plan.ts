@@ -1,21 +1,15 @@
-import type { ExtensionCommandContext } from '@mariozechner/pi-coding-agent';
+import type { ExtensionAPI, ExtensionCommandContext } from '@mariozechner/pi-coding-agent';
 
-import { logOutput } from './logger.js';
-import { runPiPrompt, type PiResult } from './pi-runner.js';
 import { PLAN_PROMPT } from './prompts.js';
 
-export async function runPlan(ctx: ExtensionCommandContext): Promise<PiResult> {
-  const { cwd, ui } = ctx;
-  ui.notify('📝 Starting planning session...', 'info');
-
-  const result = await runPiPrompt(cwd, PLAN_PROMPT, 'sonnet');
-
-  if (result.success) {
-    const logPath = await logOutput('plan', result.output);
-    ui.notify(`✅ Planning session complete (logged to: ${logPath})`, 'info');
-  } else {
-    ui.notify(`❌ Planning session failed: ${result.output}`, 'error');
-  }
-
-  return result;
+/**
+ * Plan is collaborative — the prompt explicitly tells the agent to ask the
+ * user clarifying questions. So instead of running an isolated sub-agent that
+ * has no way to talk to the user, we hand the planning brief to the parent
+ * session as a user message. The user's chat with pi becomes the planning
+ * session: pi reads the brief, asks questions, and creates specs in response.
+ */
+export function runPlan(pi: ExtensionAPI, ctx: ExtensionCommandContext): void {
+  ctx.ui.notify('Starting planning session.', 'info');
+  pi.sendUserMessage(PLAN_PROMPT);
 }

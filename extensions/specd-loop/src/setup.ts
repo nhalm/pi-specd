@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 import type { ExtensionCommandContext, ExtensionUIContext } from '@mariozechner/pi-coding-agent';
 
+import { REVIEW_FILE, SPEC_INDEX_FILE, WORK_LIST_FILE } from './conventions.js';
 import { EXTENSION_VERSION } from './version.js';
 import { isRecord } from './yaml-helpers.js';
 
@@ -25,6 +26,7 @@ interface SetupResult {
   copied: string[];
   skipped: string[];
   errors: string[];
+  aborted?: boolean;
 }
 
 export interface DetectedCommands {
@@ -192,7 +194,7 @@ function generateSpecsReadme(ctx: SetupContext): string {
 
 Specs define **WHAT to build**, not HOW. You describe behavior, contracts, and interfaces. The agent decides the implementation.
 
-**Work items** drive what's worked on. Add items to [specd_work_list.yaml](../specd_work_list.yaml) during \`/specd:plan\`.
+**Work items** drive what's worked on. Add items to [${WORK_LIST_FILE}](../${WORK_LIST_FILE}) during \`/specd:plan\`.
 
 **Future items** marked with \`(future)\` are reference only. Do not implement.
 
@@ -269,7 +271,7 @@ function normalizeGitignoreLine(line: string): string {
 
 async function updateGitignore(cwd: string): Promise<boolean> {
   const gitignorePath = resolve(cwd, '.gitignore');
-  const entries = ['.pi-specd', 'specd_work_list.yaml', 'specd_review.yaml'];
+  const entries = ['.pi-specd', WORK_LIST_FILE, REVIEW_FILE, '.specd-loop-checkpoint.json'];
   const existing = existsSync(gitignorePath) ? await readFile(gitignorePath, 'utf-8') : '';
   const existingNormalized = new Set(existing.split('\n').map(normalizeGitignoreLine));
   const missing = entries.filter((e) => !existingNormalized.has(normalizeGitignoreLine(e)));
@@ -342,7 +344,22 @@ export async function runSetup(ctx: ExtensionCommandContext): Promise<SetupResul
   const cwd = ctx.cwd;
   const result: SetupResult = { copied: [], skipped: [], errors: [] };
 
-  ctx.ui.notify('📦 Starting specd setup...', 'info');
+  const willCreate = [
+    'AGENTS.md (if missing)',
+    'PROJECT.md (if missing)',
+    `${SPEC_INDEX_FILE} (if missing)`,
+    `${WORK_LIST_FILE} (if missing, gitignored)`,
+    `${REVIEW_FILE} (if missing, gitignored)`,
+    '.pi-specd (version marker, gitignored)',
+    '.gitignore (appends specd entries if missing)',
+  ];
+  const proceed = await ctx.ui.confirm(
+    'specd setup',
+    `Setup will create or update these files in ${cwd}:\n\n${willCreate.map((p) => `  - ${p}`).join('\n')}\n\nProceed?`,
+  );
+  if (!proceed) {
+    return { ...result, aborted: true };
+  }
 
   // Step 1: Detect existing project info
   const detectedName = await detectProjectName(cwd);
@@ -392,23 +409,23 @@ export async function runSetup(ctx: ExtensionCommandContext): Promise<SetupResul
     kind: 'write',
     content: generatePROJECTMd(setupCtx),
   });
-  await writeIfMissing(result, resolve(cwd, 'specs/README.md'), 'specs/README.md', {
+  await writeIfMissing(result, resolve(cwd, SPEC_INDEX_FILE), SPEC_INDEX_FILE, {
     kind: 'write',
     content: generateSpecsReadme(setupCtx),
   });
   // Ephemeral state files: silently skip if present (no "already exists" notice)
   await writeIfMissing(
     result,
-    resolve(cwd, 'specd_work_list.yaml'),
-    'specd_work_list.yaml',
-    { kind: 'copy', src: resolve(TEMPLATES_DIR, 'specd_work_list.yaml') },
+    resolve(cwd, WORK_LIST_FILE),
+    WORK_LIST_FILE,
+    { kind: 'copy', src: resolve(TEMPLATES_DIR, WORK_LIST_FILE) },
     { silent: true },
   );
   await writeIfMissing(
     result,
-    resolve(cwd, 'specd_review.yaml'),
-    'specd_review.yaml',
-    { kind: 'copy', src: resolve(TEMPLATES_DIR, 'specd_review.yaml') },
+    resolve(cwd, REVIEW_FILE),
+    REVIEW_FILE,
+    { kind: 'copy', src: resolve(TEMPLATES_DIR, REVIEW_FILE) },
     { silent: true },
   );
 
@@ -432,7 +449,7 @@ export async function runSetup(ctx: ExtensionCommandContext): Promise<SetupResul
   return result;
 }
 
-export const SETUP_REQUIRED_PATHS = ['AGENTS.md', 'PROJECT.md', 'specs/README.md'] as const;
+export const SETUP_REQUIRED_PATHS = ['AGENTS.md', 'PROJECT.md', SPEC_INDEX_FILE] as const;
 
 export async function ensureSpecdSetup(cwd: string): Promise<SetupCheckResult> {
   const missing = SETUP_REQUIRED_PATHS.filter((p) => !existsSync(resolve(cwd, p)));
@@ -457,7 +474,7 @@ export async function checkVersion(cwd: string): Promise<VersionCheckResult> {
   if (!existsSync(specdFilePath)) {
     return {
       ok: false,
-      message: '⚠️  No .pi-specd file found. Run /specd:setup first.',
+      message: 'No .pi-specd file found. Run /specd:setup first.',
     };
   }
 
@@ -465,13 +482,13 @@ export async function checkVersion(cwd: string): Promise<VersionCheckResult> {
     const content = await readFile(specdFilePath, 'utf-8');
     const parsed: unknown = JSON.parse(content);
     if (!isSpecdInfo(parsed)) {
-      return { ok: false, message: '⚠️  .pi-specd file is malformed.' };
+      return { ok: false, message: '.pi-specd file is malformed.' };
     }
 
     if (parsed.version !== EXTENSION_VERSION) {
       return {
         ok: false,
-        message: `⚠️  Extension version mismatch: project uses ${parsed.version}, extension is ${EXTENSION_VERSION}. Run /specd:setup to update.`,
+        message: `Extension version mismatch: project uses ${parsed.version}, extension is ${EXTENSION_VERSION}. Run /specd:setup to update.`,
       };
     }
 
@@ -479,7 +496,7 @@ export async function checkVersion(cwd: string): Promise<VersionCheckResult> {
   } catch {
     return {
       ok: false,
-      message: '⚠️  Could not read .pi-specd file.',
+      message: 'Could not read .pi-specd file.',
     };
   }
 }

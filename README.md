@@ -36,7 +36,7 @@ Existing nhalm/specd projects can migrate instead:
 Then plan and run the loop:
 
 ```bash
-# Plan (interactive)
+# Plan (interactive — happens in the parent pi chat)
 /specd:plan
 
 # Run the loop (automated)
@@ -58,6 +58,50 @@ Then plan and run the loop:
 
 `/specd:setup` creates all of the above and adds the ephemeral files to `.gitignore`.
 
+## How a run looks
+
+Each command runs work in a **separate sub-agent session** — a brand-new pi agent with its own conversation and context. That sub-agent runs to completion and disposes itself; nothing it sees or says leaks back into the parent pi chat unless the extension chooses to surface it.
+
+How that sub-agent's progress is shown depends on whether you're running pi inside tmux.
+
+### Inside tmux: live side pane
+
+When pi detects `$TMUX`, every sub-agent run opens a horizontal side pane (`tmux split-window -h`) running a small viewer process. That viewer uses pi's own UI components — the same ones pi's interactive mode renders — so the side pane looks exactly like a regular pi chat: tool-call cards, syntax-highlighted code, streaming markdown, the works.
+
+The pane is not just a log. It's interactive:
+
+- Sub-agent activity (every tool call, every assistant message, every thinking block) renders into the pane in real time.
+- The pane has its own input box pinned to the bottom. **Type into it and press Enter to talk to the sub-agent mid-run** — your message gets steered into the running session (interrupting the current turn) or queued as the next prompt if it's between turns. Useful for nudging the agent: "actually skip the changelog removal", "delete that file too", "answer in JSON instead", etc.
+- For `/specd:loop`, the same pane is reused across all phases — review intake, every implement cycle, audit. Activity history scrolls; you can scroll back through completed cycles.
+- The parent pi chat stays usable, but typing there talks to the parent agent, not the sub-agent. Cross-pane discipline matters: type into the _child_ pane to steer the _child_; type into the _parent_ pane for parent-level concerns.
+
+### Outside tmux: rolling-log widget
+
+If you're not running pi inside tmux, the side pane isn't available. Instead, the sub-agent's recent activity appears as a multi-line widget above the editor in the parent pi pane: tool calls with their args, file paths, streaming response snippets. The last six entries are kept; older activity scrolls off. You can't steer the sub-agent in this mode — that requires the side pane's input box.
+
+### Ctrl+C and abort
+
+While a sub-agent is running, Ctrl+C in the **parent** pi pane aborts the in-flight sub-agent. The side pane has its own input box, but it isn't wired to abort — Ctrl+C typed inside the side pane is just keyboard input destined for that input box. (Escape used to be an abort key as well; it was removed.)
+
+- For `/specd:migrate`, an abort tears the side pane down immediately and cancels the migration.
+- For `/specd:loop`, an abort stops the current phase and pi shows a confirm dialog: **Continue with the loop?** Choosing yes moves on to the next phase (next cycle, audit, etc.); choosing no ends the loop entirely. This lets you skip a stuck implement cycle without scrapping the whole loop.
+
+### When a sub-agent finishes
+
+`/specd:migrate`:
+
+- Side pane closes.
+- The sub-agent's structured summary (files modified / created / deleted / caveats / technical notes) is handed to the **parent** pi agent via a hidden trigger message. The parent agent then relays the summary to you in its own voice in the main pi chat. The trigger itself is not displayed; you only see the parent's response.
+
+`/specd:loop`:
+
+- Pane stays open after the loop completes (audit included), so you can scroll back through everything that happened. When a run finishes cleanly, the parent sends a `specd:done` control event and the pane renders a "complete — close pane to dismiss" banner; the pane stays open until you close it. A 5-minute fallback fires if the parent crashes without sending `specd:done`.
+- Final status appears in the main pi chat.
+
+### Sub-agent tool surface
+
+Sub-agents are restricted to the standard built-in tools: `read`, `bash`, `edit`, `write`. Extension tools that pi may have loaded for the parent (e.g. `@mjakl/pi-subagent`'s `subagent`) are intentionally hidden from the sub-agent so it doesn't try to delegate to agents that aren't configured in its context.
+
 ## Commands
 
 ### `/specd:setup`
@@ -66,20 +110,22 @@ Initialize specd in a new project. Detects build/test commands and conventions.
 
 ### `/specd:migrate`
 
-Migrate an existing nhalm/specd project to specd-loop format (removes spec versions, status lifecycle, and changelogs).
+Migrate an existing nhalm/specd project to specd-loop format (removes spec versions, status lifecycle, and changelogs). Runs in a sub-agent. After it finishes, the parent pi agent delivers a summary in chat. Tmux side pane is interactive while it runs.
 
 ### `/specd:plan`
 
-Interactive planning. The agent helps you create specs and work items by asking questions and writing to `specd_work_list.yaml`.
+Interactive planning. **Runs in the parent pi session itself**, not in a sub-agent — the planning brief is injected as a user message and pi takes a turn, asking clarifying questions, writing specs, and updating `specd_work_list.yaml`. There's no side pane for plan.
 
 ### `/specd:loop [options]`
 
-Run the full automated loop: review intake → implement (looped) → audit.
+Run the full automated loop: review intake → implement (looped) → audit. Each phase runs as its own sub-agent (fresh context per phase / per cycle). One side pane is reused for all phases.
 
 | Option           | Description                                    |
 | ---------------- | ---------------------------------------------- |
 | `--skip-audit`   | Skip the audit phase                           |
 | `--max-cycles=N` | Override max implement iterations (default: 5) |
+
+- **Halt on no-commit:** if an implement cycle finishes but the agent didn't land a new commit (verified via `git rev-list HEAD ^${headBefore} --count` ≥ 1, which also rejects an `--amend` of the previous commit), the loop **halts entirely** — it does not skip the item. The work item stays incomplete and the loop surfaces a recovery message pointing at `git status`, blocked hooks, and the per-phase transcript path. Re-run `/specd:loop` to retry.
 
 ### `/specd:status`
 
@@ -87,7 +133,7 @@ Show the work list: ready items, blocked items, pending reviews, and the next ac
 
 ## Review items
 
-When implementation or audit finds an ambiguous situation, the loop pauses and surfaces the finding. Edit `specd_review.yaml` and add a `decision:` field to each finding. The path to the file is printed when the loop pauses.
+Any of the three loop phases — review intake, implement, or audit — can produce a finding when it hits an ambiguous situation. When that happens the loop pauses and surfaces the finding. Edit `specd_review.yaml` and add a `decision:` field to each finding. The path to the file is printed when the loop pauses.
 
 Common decisions:
 
@@ -100,7 +146,20 @@ When you run `/specd:loop` again, the review intake interprets your decisions an
 
 ## Requirements
 
-The working directory must contain `AGENTS.md`, `PROJECT.md`, and `specs/README.md`. `/specd:setup` creates all three.
+- pi (`@mariozechner/pi-coding-agent`) installed and configured.
+- The working directory must contain `AGENTS.md`, `PROJECT.md`, and `specs/README.md`. `/specd:setup` creates all three.
+- For the side-pane viewer experience, pi must be running inside a tmux session. Otherwise the rolling-log widget fallback is used (no in-flight steering).
+
+## Troubleshooting
+
+- **"Cannot verify commits: this directory is not a git repository"** — the loop verifies progress via `git rev-list`, so the project must be a git repo. Run `git init` (and make at least one commit) before re-running `/specd:loop`.
+- **Cycle ended without a commit** — the loop halts and surfaces a recovery hint. Check `git status` for leftover staged or unstaged changes; check whether a `pre-commit` / `commit-msg` hook blocked the commit; and read the full transcript at the path printed in the recovery message. Fix the underlying issue, then re-run `/specd:loop` to pick up the same item.
+- **Spec file missing** — a work item references `specs/<name>.md` but the file doesn't exist. Run `/specd:plan` to (re)create the spec, or remove the work item from `specd_work_list.yaml`.
+- **Version-mismatch warning at preflight** — the project's `.pi-specd` file records a different extension version than the installed extension. Re-run `/specd:setup` to refresh the marker (and pick up any new template behavior).
+- **Per-phase log files** — every phase (review intake, each implement cycle, audit) writes its full transcript to `${TMPDIR}/specd-loop/<phase>-<timestamp>.log` (on macOS, `TMPDIR` is something like `/var/folders/.../T`; on Linux it's typically `/tmp`). The loop prints the exact path when it surfaces an error, but they're useful for any post-hoc investigation.
+- **Sub-agent crash diagnostics** — set `SPECD_DEBUG=1` (e.g. `SPECD_DEBUG=1 pi`) to also write any sub-agent unhandled rejection or uncaught exception to `${TMPDIR}/specd-debug.log`. Off by default so normal runs don't leave files in `/tmp`.
+- **Pinning a sub-agent model** — set `SPECD_MODEL=<model-id>` before launching pi to override the inherited model. Example: `SPECD_MODEL=claude-sonnet-4-6 pi`. Useful for deterministic loops. Accepts a bare model id or canonical `provider/modelId`. If the reference is empty or doesn't unambiguously match a configured model, sub-agents fall back to pi's currently-configured model.
+- **Loop crashed mid-cycle** — when `/specd:loop` next runs, it'll detect the crash and ask whether to resume. Saying yes finishes the cycle (marks the in-flight item complete and continues with the next); saying no discards the checkpoint and starts fresh. The checkpoint lives at `.specd-loop-checkpoint.json` (gitignored).
 
 ## License
 

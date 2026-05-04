@@ -2,7 +2,8 @@ import { resolve } from 'node:path';
 
 import type { ExtensionAPI } from '@mariozechner/pi-coding-agent';
 
-import { REVIEW_FILE, type ReviewFinding } from './review.js';
+import { DECISIONS, REVIEW_FILE } from './conventions.js';
+import { type ReviewFinding } from './review.js';
 
 export function sendProgress(
   pi: ExtensionAPI,
@@ -22,9 +23,16 @@ export function surfaceReviewItems(pi: ExtensionAPI, cwd: string, findings: Revi
   sendProgress(
     pi,
     'info',
-    `📋 ${findings.length} review item(s) need a decision.\n\nFile: ${reviewPath} (gitignored)\n\nAdd a \`decision:\` line under each finding (see options listed in each item), then re-run \`/specd:loop\`.`,
+    `${findings.length} review finding(s) need a decision. Edit ${reviewPath} (gitignored, lives only on disk) and add a \`decision:\` line under each finding (see options listed below), then re-run \`/specd:loop\`.`,
   );
 
+  // Each finding card is posted with `triggerTurn: false` because pi's
+  // sendCustomMessage routing (agent-session.js:942-971) only honors the
+  // first triggerTurn while the agent isn't streaming — every subsequent
+  // call sees `isStreaming === true` and silently falls through to
+  // session.steer(), which the user's steering mode may drop entirely.
+  // The leading `sendProgress` call above already triggered one turn for
+  // the summary, which is the only turn we want.
   for (let i = 0; i < findings.length; i++) {
     const item = findings[i];
     pi.sendMessage(
@@ -43,7 +51,7 @@ export function surfaceReviewItems(pi: ExtensionAPI, cwd: string, findings: Revi
           ``,
           `**Recommendation:** ${item.recommendation}`,
           ``,
-          `Add a decision in \`${reviewPath}\`. Common values: \`Fix the code\`, \`Update the spec\`, \`Ignore\`, \`Keep as is\`. Example:`,
+          `Add a decision in \`${reviewPath}\`. Common values: ${DECISIONS.map((d) => `\`${d}\``).join(', ')}. Example:`,
           ``,
           '```yaml',
           `- spec: ${item.spec}`,
@@ -54,7 +62,7 @@ export function surfaceReviewItems(pi: ExtensionAPI, cwd: string, findings: Revi
         display: true,
         details: { index: i },
       },
-      { triggerTurn: true },
+      { triggerTurn: false },
     );
   }
 }

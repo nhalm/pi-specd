@@ -3,15 +3,26 @@
 # Single execution queue for all work — spec implementations, audit findings,
 # and promoted review items.
 #
-# HOW IT WORKS:
-# 1. Pick an unblocked item (completed: false, no blocked field)
-# 2. Implement it
-# 3. Mark item as completed: true
-# 4. Remove blocked field from items that depended on what you completed
-# 5. LOOP_COMPLETE when no unblocked items remain
+# HOW IT WORKS (driver's perspective — the implementer agent does NOT read or
+# write this file directly):
+# 1. The /specd:loop driver picks the next unblocked item (completed: false,
+#    no `blocked:` field).
+# 2. It hands that item's description to a fresh sub-agent and waits for the
+#    cycle to finish.
+# 3. After the cycle, the driver verifies a new commit landed (via
+#    `git rev-list HEAD ^${headBefore} --count` ≥ 1, which also rejects an
+#    `--amend` of the prior commit) and that no new review-finding was
+#    appended to specd_review.yaml during the cycle.
+# 4. If both gates pass, the driver marks the item `completed: true` and
+#    clears any `blocked:` fields whose dependency was just resolved.
+# 5. If either gate fails, the item stays incomplete and the loop halts —
+#    user re-runs /specd:loop to retry.
+# 6. Loop completes when no unblocked items remain.
 #
 # AUDIT SCOPE:
-# Specs that appear in this file will be audited.
-# Use --full-audit to audit all specs in specs/.
+# Specs that appear in the `specs:` array below are audited. When a spec's
+# work is fully complete, the audit pass prunes it from this list at the end
+# of the loop, so it won't be re-audited next loop unless /specd:plan re-adds
+# it.
 
 specs: []

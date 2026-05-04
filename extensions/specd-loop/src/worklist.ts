@@ -1,12 +1,13 @@
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, rename, unlink } from 'node:fs/promises';
 import { resolve, dirname } from 'node:path';
 
 import yaml from 'js-yaml';
 
+import { WORK_LIST_FILE } from './conventions.js';
 import type { WorkList, Spec, WorkItem } from './types.js';
 import { isRecord, asString } from './yaml-helpers.js';
 
-export const WORK_LIST_FILE = 'specd_work_list.yaml';
+export { WORK_LIST_FILE };
 
 export async function loadWorkList(cwd: string): Promise<WorkList> {
   const filePath = resolve(cwd, WORK_LIST_FILE);
@@ -37,7 +38,23 @@ export async function saveWorkList(cwd: string, workList: WorkList): Promise<voi
   const dir = dirname(filePath);
   await mkdir(dir, { recursive: true });
   const content = yaml.dump({ specs: workList.specs }, { indent: 2, lineWidth: -1 });
-  await writeFile(filePath, content, 'utf-8');
+  // Atomic write: writeFile to a sibling temp path, then rename onto the
+  // target. On POSIX, rename(2) is atomic — readers either see the old
+  // content or the full new content, never a partial file. A crash before
+  // the rename leaves the original work list untouched.
+  const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  await writeFile(tmpPath, content, 'utf-8');
+  try {
+    await rename(tmpPath, filePath);
+  } catch (err) {
+    // Best-effort cleanup of the temp file on rename failure.
+    try {
+      await unlink(tmpPath);
+    } catch {
+      /* ignore */
+    }
+    throw err;
+  }
 }
 
 function normalizeWorkList(data: unknown): WorkList {
@@ -58,7 +75,12 @@ function normalizeWorkList(data: unknown): WorkList {
         for (const item of spec.items) {
           if (!isRecord(item)) continue;
           const description = asString(item.description);
-          if (item.completed) {
+          // Strict equality on the literal `true`. A hand-edited YAML file
+          // with `completed: "false"` (string) or `completed: 1` would
+          // truthy-coerce into the completed branch under truthy checks; we
+          // want anything that isn't the YAML boolean `true` to remain
+          // pending so the loop will pick it up.
+          if (item.completed === true) {
             items.push({ spec: name, description, completed: true });
           } else {
             items.push({

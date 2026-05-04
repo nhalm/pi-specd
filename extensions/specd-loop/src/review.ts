@@ -3,7 +3,10 @@ import { resolve } from 'node:path';
 
 import yaml from 'js-yaml';
 
+import { REVIEW_FILE } from './conventions.js';
 import { isRecord, asString } from './yaml-helpers.js';
+
+export { REVIEW_FILE };
 
 export interface ReviewFinding {
   spec: string;
@@ -20,8 +23,6 @@ export interface ReviewList {
 }
 
 const EMPTY_REVIEW_LIST: ReviewList = { findings: [] };
-
-export const REVIEW_FILE = 'specd_review.yaml';
 
 export async function loadReviewList(cwd: string): Promise<ReviewList> {
   const filePath = resolve(cwd, REVIEW_FILE);
