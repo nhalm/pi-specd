@@ -20,8 +20,15 @@ jobs:
       # We pass a fine-grained PAT instead of GITHUB_TOKEN so the release PR
       # triggers `pull_request` workflows (notably `check`). PRs opened with
       # GITHUB_TOKEN are blocked from triggering workflows by GitHub.
+      # continue-on-error works around release-please-action#1203: pass-2
+      # (drafting the *next* release PR) can fail with a transient GraphQL
+      # error after pass-1 already cut the tag and GitHub Release. Without
+      # this, the step is marked failed, the gated publish steps below never
+      # run, and the release is permanently stranded — re-running cannot
+      # recover it because the tag now exists.
       - uses: googleapis/release-please-action@v5
         id: release
+        continue-on-error: true
         with:
           token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
           config-file: release-please-config.json
