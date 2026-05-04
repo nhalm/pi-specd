@@ -2,7 +2,8 @@ import { resolve } from 'node:path';
 
 import type { ExtensionAPI } from '@mariozechner/pi-coding-agent';
 
-import { REVIEW_FILE, type ReviewFinding } from './review.js';
+import { DECISIONS, REVIEW_FILE } from './conventions.js';
+import { type ReviewFinding } from './review.js';
 
 export function sendProgress(
   pi: ExtensionAPI,
@@ -50,7 +51,7 @@ export function surfaceReviewItems(pi: ExtensionAPI, cwd: string, findings: Revi
           ``,
           `**Recommendation:** ${item.recommendation}`,
           ``,
-          `Add a decision in \`${reviewPath}\`. Common values: \`Fix the code\`, \`Update the spec\`, \`Ignore\`, \`Keep as is\`. Example:`,
+          `Add a decision in \`${reviewPath}\`. Common values: ${DECISIONS.map((d) => `\`${d}\``).join(', ')}. Example:`,
           ``,
           '```yaml',
           `- spec: ${item.spec}`,

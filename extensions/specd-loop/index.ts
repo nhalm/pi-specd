@@ -2,6 +2,7 @@ import { resolve } from 'node:path';
 
 import type { ExtensionAPI, ExtensionCommandContext } from '@mariozechner/pi-coding-agent';
 
+import { REVIEW_FILE } from './src/conventions.js';
 import { runLoop } from './src/loop.js';
 import { runMigrate } from './src/migrate.js';
 import { runPlan } from './src/plan.js';
@@ -156,7 +157,7 @@ export default function (pi: ExtensionAPI) {
       }
 
       if (undecided.length > 0) {
-        const reviewPath = resolve(ctx.cwd, 'specd_review.yaml');
+        const reviewPath = resolve(ctx.cwd, REVIEW_FILE);
         msg += `\n**Review needed:** ${undecided.length} finding(s) in ${reviewPath}\n`;
         undecided.slice(0, 5).forEach((f, i) => {
           msg += `${i + 1}. [${f.spec}] ${f.finding.split('\n')[0]}\n`;
@@ -173,7 +174,7 @@ export default function (pi: ExtensionAPI) {
 
 function nextAction(unblocked: number, undecided: number): string {
   if (undecided > 0) {
-    return 'Edit specd_review.yaml to record decisions, then run /specd:loop.';
+    return `Edit ${REVIEW_FILE} to record decisions, then run /specd:loop.`;
   }
   if (unblocked > 0) {
     return 'Run /specd:loop to start working through ready items.';

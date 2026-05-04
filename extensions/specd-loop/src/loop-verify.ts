@@ -29,7 +29,7 @@ export type ContractOutcome =
 export interface VerifyInput {
   /**
    * Set of finding keys present before the cycle ran. Each key is the
-   * `findingKey()` of a finding from specd_review.yaml; callers build this
+   * `findingKey()` of a finding from the review file; callers build this
    * by mapping the loaded findings array.
    */
   findingsBefore: ReadonlySet<string>;

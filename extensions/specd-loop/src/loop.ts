@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import type { ExtensionAPI, ExtensionCommandContext } from '@mariozechner/pi-coding-agent';
 
 import { abortOnCtrlC, type CtrlCWatcher } from './abort-on-ctrl-c.js';
+import { WORK_LIST_FILE, specPath } from './conventions.js';
 import { getHeadCommit, getNewCommitCount } from './git.js';
 import { logOutput } from './logger.js';
 import { findingKey, verifyImplementContract } from './loop-verify.js';
@@ -312,13 +313,13 @@ async function runLoopBody(
     // mid-run with a missing-file error and surface as "Cycle ended without a
     // commit" — a misleading error class. Halt the loop here so the user sees
     // the real cause before continuing.
-    const specPath = resolve(cwd, 'specs', `${item.spec}.md`);
-    if (!existsSync(specPath)) {
+    const specFile = resolve(cwd, specPath(item.spec));
+    if (!existsSync(specFile)) {
       clearWidget(ctx);
       sendProgress(
         pi,
         'error',
-        `Spec file missing: ${specPath}. Item [${item.spec}] ${item.description} cannot be implemented until the spec exists. Run /specd:plan to recreate it, then re-run /specd:loop.`,
+        `Spec file missing: ${specFile}. Item [${item.spec}] ${item.description} cannot be implemented until the spec exists. Run /specd:plan to recreate it, then re-run /specd:loop.`,
       );
       return {
         userAborted: false,
@@ -437,7 +438,7 @@ async function runLoopBody(
       sendProgress(
         pi,
         'error',
-        `Couldn't re-locate item [${item.spec}] ${item.description} in the work list. Was specd_work_list.yaml edited mid-loop? Inspect the file and re-run /specd:loop.`,
+        `Couldn't re-locate item [${item.spec}] ${item.description} in the work list. Was ${WORK_LIST_FILE} edited mid-loop? Inspect the file and re-run /specd:loop.`,
       );
       return {
         userAborted: false,
