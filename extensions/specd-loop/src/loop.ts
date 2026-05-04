@@ -1,3 +1,6 @@
+import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
+
 import type { ExtensionAPI, ExtensionCommandContext } from '@mariozechner/pi-coding-agent';
 
 import { abortOnCtrlC, type CtrlCWatcher } from './abort-on-ctrl-c.js';
@@ -302,6 +305,25 @@ async function runLoopBody(
     if (!item) {
       sendProgress(pi, 'info', 'No work items remaining.');
       break;
+    }
+
+    // Precondition: the spec file the implement-prompt tells the agent to read
+    // must exist. If a user renamed or deleted it, the cycle would fail
+    // mid-run with a missing-file error and surface as "Cycle ended without a
+    // commit" — a misleading error class. Halt the loop here so the user sees
+    // the real cause before continuing.
+    const specPath = resolve(cwd, 'specs', `${item.spec}.md`);
+    if (!existsSync(specPath)) {
+      clearWidget(ctx);
+      sendProgress(
+        pi,
+        'error',
+        `Spec file missing: ${specPath}. Item [${item.spec}] ${item.description} cannot be implemented until the spec exists. Run /specd:plan to recreate it, then re-run /specd:loop.`,
+      );
+      return {
+        userAborted: false,
+        viewerSummary: `spec file missing for [${item.spec}] — check chat for details`,
+      };
     }
 
     const findingsBefore = new Set((await loadReviewList(cwd)).findings.map(findingKey));
