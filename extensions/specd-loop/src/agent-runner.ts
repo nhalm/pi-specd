@@ -1,7 +1,7 @@
 import { appendFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 
-import { createAgentSession } from '@mariozechner/pi-coding-agent';
+import { AuthStorage, ModelRegistry, createAgentSession } from '@mariozechner/pi-coding-agent';
 
 import {
   eventToFrames,
@@ -9,6 +9,53 @@ import {
   type ActivityFrame,
   type FrameContext,
 } from './activity-frame.js';
+
+/**
+ * Pi's `Model<Api>` type, recovered structurally from `ModelRegistry`'s public
+ * surface. Pi-coding-agent doesn't re-export `Model`/`Api` and
+ * `@mariozechner/pi-ai` is only a transitive dependency (mirrors the
+ * convention in activity-frame.ts), so we extract the type from
+ * `getAvailable()`'s return rather than importing pi-ai directly.
+ */
+type PiModel = ReturnType<ModelRegistry['getAvailable']>[number];
+
+/**
+ * Resolve a model reference (bare id, e.g. "claude-sonnet-4-6", or canonical
+ * "provider/modelId") to a `Model<Api>` object. Mirrors the matching rules
+ * in pi's interactive-mode model resolver: prefer canonical match, then
+ * provider/modelId match, then bare id (rejecting cross-provider ambiguity).
+ *
+ * Returns undefined if the reference doesn't unambiguously match a model
+ * available with configured auth — the caller falls back to letting pi pick
+ * its default model.
+ */
+function resolveSpecdModel(reference: string): PiModel | undefined {
+  const trimmed = reference.trim();
+  if (!trimmed) return undefined;
+  const registry = ModelRegistry.create(AuthStorage.create());
+  const available = registry.getAvailable();
+  const lower = trimmed.toLowerCase();
+  const canonical = available.filter((m) => `${m.provider}/${m.id}`.toLowerCase() === lower);
+  if (canonical.length === 1) return canonical[0];
+  if (canonical.length > 1) return undefined;
+  const slash = trimmed.indexOf('/');
+  if (slash !== -1) {
+    const prov = trimmed.slice(0, slash).trim().toLowerCase();
+    const id = trimmed
+      .slice(slash + 1)
+      .trim()
+      .toLowerCase();
+    if (prov && id) {
+      const matches = available.filter(
+        (m) => m.provider.toLowerCase() === prov && m.id.toLowerCase() === id,
+      );
+      if (matches.length === 1) return matches[0];
+      if (matches.length > 1) return undefined;
+    }
+  }
+  const idMatches = available.filter((m) => m.id.toLowerCase() === lower);
+  return idMatches.length === 1 ? idMatches[0] : undefined;
+}
 
 /**
  * Outcome of a single sub-agent run. The `kind` discriminator replaces the
@@ -106,6 +153,12 @@ export async function runAgentSession(
   // matching tool_execution_end (pi events don't carry args on _end).
   const frameCtx: FrameContext = { previousArgsSummary: new Map() };
 
+  // SPECD_MODEL pins the model for sub-agents independent of pi's settings.
+  // Useful for deterministic loops (e.g. SPECD_MODEL=claude-sonnet-4-6 /specd:loop).
+  // If unset, sub-agents inherit pi's currently-configured model.
+  const modelRef = process.env.SPECD_MODEL?.trim();
+  const model = modelRef ? resolveSpecdModel(modelRef) : undefined;
+
   // Restrict the sub-agent to the standard built-in tools. Without this, pi
   // auto-discovers user-installed extensions (e.g. @mjakl/pi-subagent) and
   // exposes their tools to the sub-agent, which then wastes tokens trying to
@@ -113,6 +166,7 @@ export async function runAgentSession(
   const { session } = await createAgentSession({
     cwd,
     tools: ['read', 'bash', 'edit', 'write'],
+    ...(model ? { model } : {}),
   });
 
   // Read `signal.aborted` through this helper everywhere below the
