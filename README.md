@@ -81,7 +81,7 @@ If you're not running pi inside tmux, the side pane isn't available. Instead, th
 
 ### Ctrl+C and abort
 
-While a sub-agent is running, Ctrl+C in the **parent** pi pane aborts the in-flight sub-agent. (Ctrl+C inside the side pane is captured by the pane's input box for editing, not for aborting the agent.)
+While a sub-agent is running, Ctrl+C in the **parent** pi pane aborts the in-flight sub-agent. The side pane has its own input box, but it isn't wired to abort — Ctrl+C typed inside the side pane is just keyboard input destined for that input box. (Escape used to be an abort key as well; it was removed.)
 
 - For `/specd:migrate`, an abort tears the side pane down immediately and cancels the migration.
 - For `/specd:loop`, an abort stops the current phase and pi shows a confirm dialog: **Continue with the loop?** Choosing yes moves on to the next phase (next cycle, audit, etc.); choosing no ends the loop entirely. This lets you skip a stuck implement cycle without scrapping the whole loop.
@@ -95,7 +95,7 @@ While a sub-agent is running, Ctrl+C in the **parent** pi pane aborts the in-fli
 
 `/specd:loop`:
 
-- Pane stays open after the loop completes (audit included), so you can scroll back through everything that happened. It auto-exits about 30 seconds after the parent closes its end.
+- Pane stays open after the loop completes (audit included), so you can scroll back through everything that happened. When a run finishes cleanly, the parent sends a `specd:done` control event and the pane renders a "complete — close pane to dismiss" banner; the pane stays open until you close it. A 5-minute fallback fires if the parent crashes without sending `specd:done`.
 - Final status appears in the main pi chat.
 
 ### Sub-agent tool surface
@@ -125,13 +125,15 @@ Run the full automated loop: review intake → implement (looped) → audit. Eac
 | `--skip-audit`   | Skip the audit phase                           |
 | `--max-cycles=N` | Override max implement iterations (default: 5) |
 
+- **Halt on no-commit:** if an implement cycle finishes but the agent didn't land a new commit (verified via `git rev-list HEAD ^${headBefore} --count` ≥ 1, which also rejects an `--amend` of the previous commit), the loop **halts entirely** — it does not skip the item. The work item stays incomplete and the loop surfaces a recovery message pointing at `git status`, blocked hooks, and the per-phase transcript path. Re-run `/specd:loop` to retry.
+
 ### `/specd:status`
 
 Show the work list: ready items, blocked items, pending reviews, and the next action to take.
 
 ## Review items
 
-When implementation or audit finds an ambiguous situation, the loop pauses and surfaces the finding. Edit `specd_review.yaml` and add a `decision:` field to each finding. The path to the file is printed when the loop pauses.
+Any of the three loop phases — review intake, implement, or audit — can produce a finding when it hits an ambiguous situation. When that happens the loop pauses and surfaces the finding. Edit `specd_review.yaml` and add a `decision:` field to each finding. The path to the file is printed when the loop pauses.
 
 Common decisions:
 
