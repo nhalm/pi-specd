@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.1](https://github.com/nhalm/pi-specd/compare/v1.1.0...v1.1.1) (2026-05-04)
+
+
+### Bug Fixes
+
+* empty commit to verify release-please + publish flow end-to-end ([#25](https://github.com/nhalm/pi-specd/issues/25)) ([3ff85e9](https://github.com/nhalm/pi-specd/commit/3ff85e930bacb0942cadedcef71080e615160d1e))
+
 ## [1.1.0](https://github.com/nhalm/pi-specd/compare/v1.0.1...v1.1.0) (2026-05-04)
 
 
