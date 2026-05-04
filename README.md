@@ -159,6 +159,7 @@ When you run `/specd:loop` again, the review intake interprets your decisions an
 - **Per-phase log files** — every phase (review intake, each implement cycle, audit) writes its full transcript to `${TMPDIR}/specd-loop/<phase>-<timestamp>.log` (on macOS, `TMPDIR` is something like `/var/folders/.../T`; on Linux it's typically `/tmp`). The loop prints the exact path when it surfaces an error, but they're useful for any post-hoc investigation.
 - **Sub-agent crash diagnostics** — set `SPECD_DEBUG=1` (e.g. `SPECD_DEBUG=1 pi`) to also write any sub-agent unhandled rejection or uncaught exception to `${TMPDIR}/specd-debug.log`. Off by default so normal runs don't leave files in `/tmp`.
 - **Pinning a sub-agent model** — set `SPECD_MODEL=<model-id>` before launching pi to override the inherited model. Example: `SPECD_MODEL=claude-sonnet-4-6 pi`. Useful for deterministic loops. Accepts a bare model id or canonical `provider/modelId`. If the reference is empty or doesn't unambiguously match a configured model, sub-agents fall back to pi's currently-configured model.
+- **Loop crashed mid-cycle** — when `/specd:loop` next runs, it'll detect the crash and ask whether to resume. Saying yes finishes the cycle (marks the in-flight item complete and continues with the next); saying no discards the checkpoint and starts fresh. The checkpoint lives at `.specd-loop-checkpoint.json` (gitignored).
 
 ## License
 

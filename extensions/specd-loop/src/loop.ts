@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import type { ExtensionAPI, ExtensionCommandContext } from '@mariozechner/pi-coding-agent';
 
 import { abortOnCtrlC, type CtrlCWatcher } from './abort-on-ctrl-c.js';
+import { clearCheckpoint, readCheckpoint, writeCheckpoint } from './checkpoint.js';
 import { WORK_LIST_FILE, specPath } from './conventions.js';
 import { getHeadCommit, getNewCommitCount } from './git.js';
 import { logOutput } from './logger.js';
@@ -46,12 +47,81 @@ function parseArgs(args: string): LoopOptions {
   return options;
 }
 
+/**
+ * Detect a stale checkpoint left behind by a previous crashed run and offer
+ * the user a chance to recover. The recovery is **best-effort**: we can't
+ * tell with certainty whether the crash happened before or after the
+ * markItemCompleted+saveWorkList pair, so we re-mark only when the pending
+ * item is still pending in the on-disk work list. If the item is already
+ * completed (the crash happened after saveWorkList but before clearing the
+ * checkpoint), do nothing — the work was already persisted.
+ *
+ * Always clears the checkpoint at the end so the next run starts clean.
+ */
+async function maybeRecoverFromCheckpoint(
+  pi: ExtensionAPI,
+  ctx: ExtensionCommandContext,
+): Promise<void> {
+  const stale = await readCheckpoint(ctx.cwd);
+  if (!stale) return;
+
+  const ago = Math.round((Date.now() - new Date(stale.startedAt).getTime()) / 1000);
+  const proceed = await ctx.ui.confirm(
+    'Resume from checkpoint?',
+    [
+      `A previous /specd:loop run crashed mid-cycle ${ago}s ago.`,
+      `It was finishing item: [${stale.pendingItem.spec}] ${stale.pendingItem.description} (cycle ${stale.cycle}).`,
+      ``,
+      `If yes: continue from where it left off (mark this item complete; the next loop picks the next item; no double-implementation).`,
+      `If no: discard the checkpoint and start fresh.`,
+      ``,
+      `Resume?`,
+    ].join('\n'),
+  );
+
+  if (proceed) {
+    const wl = await loadWorkList(ctx.cwd);
+    const stillPending = wl.specs
+      .flatMap((s) => s.items)
+      .find(
+        (i) =>
+          i.spec === stale.pendingItem.spec &&
+          i.description === stale.pendingItem.description &&
+          !i.completed,
+      );
+    if (stillPending) {
+      markItemCompleted(wl, stale.pendingItem.spec, stale.pendingItem.description);
+      await saveWorkList(ctx.cwd, wl);
+      sendProgress(
+        pi,
+        'info',
+        `Recovered: marked [${stale.pendingItem.spec}] ${stale.pendingItem.description} complete from checkpoint.`,
+      );
+    } else {
+      sendProgress(
+        pi,
+        'info',
+        `Checkpoint resume: [${stale.pendingItem.spec}] ${stale.pendingItem.description} was already complete in the work list; nothing to do.`,
+      );
+    }
+  } else {
+    sendProgress(pi, 'info', 'Discarded crash checkpoint; starting fresh.');
+  }
+  await clearCheckpoint(ctx.cwd);
+}
+
 export async function runLoop(
   pi: ExtensionAPI,
   ctx: ExtensionCommandContext,
   args: string,
 ): Promise<void> {
   const options = parseArgs(args);
+
+  // If a previous /specd:loop run crashed between markItemCompleted and
+  // saveWorkList, a checkpoint file is sitting on disk. Detect it BEFORE
+  // doing anything else so the user can choose to recover (mark the in-flight
+  // item complete) or discard the checkpoint and start fresh.
+  await maybeRecoverFromCheckpoint(pi, ctx);
 
   sendProgress(
     pi,
@@ -431,9 +501,21 @@ async function runLoopBody(
       };
     }
 
-    // Mark complete and persist.
+    // Mark complete and persist. Drop a checkpoint BEFORE we mutate or write
+    // anything so a crash during the in-memory mark or the on-disk save can
+    // be recovered on the next /specd:loop run. Clear it after the save
+    // succeeds — a clean cycle leaves no checkpoint behind.
+    await writeCheckpoint(cwd, {
+      startedAt: new Date().toISOString(),
+      pendingItem: { spec: item.spec, description: item.description },
+      cycle,
+    });
     const fresh = await loadWorkList(cwd);
     if (!markItemCompleted(fresh, item.spec, item.description)) {
+      // Best-effort cleanup: there's nothing to recover from since the mark
+      // never landed, and leaving the checkpoint behind would prompt a
+      // confusing "resume?" dialog on the next run.
+      await clearCheckpoint(cwd);
       clearWidget(ctx);
       sendProgress(
         pi,
@@ -446,6 +528,7 @@ async function runLoopBody(
       };
     }
     await saveWorkList(cwd, fresh);
+    await clearCheckpoint(cwd);
     totalProcessed++;
 
     const remainingAfter = getUnblockedItems(fresh).length;
