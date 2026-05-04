@@ -131,19 +131,27 @@ export async function runAgentSession(
     return { kind: 'aborted', output: '' };
   }
 
-  // Crash diagnostics: while this sub-agent is running, log any unhandled
-  // rejection or uncaught exception to /tmp/specd-debug.log, regardless of
-  // whether some other listener decides to exit the process. Pi may have its
-  // own handler that calls process.exit() — we can't override that, but
-  // appendFileSync runs synchronously so the trail is on disk before exit.
-  const debugLog = `${tmpdir()}/specd-debug.log`;
+  // Crash diagnostics: while this sub-agent is running, capture any unhandled
+  // rejection or uncaught exception in the in-memory transcript so the parent
+  // can surface it. The persistent file trail at $TMPDIR/specd-debug.log is
+  // gated behind the `SPECD_DEBUG` env var — set `SPECD_DEBUG=1 pi` to enable
+  // it when triaging an issue. Without the gate every run would write to
+  // /tmp on shared workstations, which the architecture review flagged as
+  // unwanted side-effects. The listeners themselves stay registered
+  // unconditionally because the `uncaughtException` handler also re-throws
+  // on next tick to preserve Node's default crash-and-exit semantics — that
+  // safety behavior must not depend on debug being on.
+  const debugEnabled = !!process.env.SPECD_DEBUG;
+  const debugLog = debugEnabled ? `${tmpdir()}/specd-debug.log` : null;
   const writeDebug = (kind: string, err: unknown) => {
     const msg = err instanceof Error ? `${err.message}\n${err.stack ?? ''}` : String(err);
-    const stamp = new Date().toISOString();
-    try {
-      appendFileSync(debugLog, `\n[${stamp}] ${kind}\n${msg}\n`);
-    } catch {
-      // best-effort
+    if (debugLog) {
+      const stamp = new Date().toISOString();
+      try {
+        appendFileSync(debugLog, `\n[${stamp}] ${kind}\n${msg}\n`);
+      } catch {
+        // best-effort
+      }
     }
     transcript.push(`[${kind}] ${msg}\n`);
   };

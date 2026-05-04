@@ -156,6 +156,7 @@ When you run `/specd:loop` again, the review intake interprets your decisions an
 - **Cycle ended without a commit** — the loop halts and surfaces a recovery hint. Check `git status` for leftover staged or unstaged changes; check whether a `pre-commit` / `commit-msg` hook blocked the commit; and read the full transcript at the path printed in the recovery message. Fix the underlying issue, then re-run `/specd:loop` to pick up the same item.
 - **Version-mismatch warning at preflight** — the project's `.pi-specd` file records a different extension version than the installed extension. Re-run `/specd:setup` to refresh the marker (and pick up any new template behavior).
 - **Per-phase log files** — every phase (review intake, each implement cycle, audit) writes its full transcript to `${TMPDIR}/specd-loop/<phase>-<timestamp>.log` (on macOS, `TMPDIR` is something like `/var/folders/.../T`; on Linux it's typically `/tmp`). The loop prints the exact path when it surfaces an error, but they're useful for any post-hoc investigation.
+- **Sub-agent crash diagnostics** — set `SPECD_DEBUG=1` (e.g. `SPECD_DEBUG=1 pi`) to also write any sub-agent unhandled rejection or uncaught exception to `${TMPDIR}/specd-debug.log`. Off by default so normal runs don't leave files in `/tmp`.
 
 ## License
 
