@@ -4,7 +4,8 @@
  * spinning up an agent session.
  *
  * Three signals feed in:
- *   - Did the review file grow (agent surfaced ambiguity)?
+ *   - Did review surface a *new* finding (compared by structural identity,
+ *     not net count — see `findingKey` below)?
  *   - Did HEAD advance?
  *   - How many net-new commits landed (rev-list HEAD ^before --count)?
  *
@@ -12,19 +13,28 @@
  * compare HEAD movement and the new-commit count to decide between committed,
  * amend-only (HEAD changed but rev-list ^old --count is 0 — typically a
  * `git commit --amend` against the prior tip), and no-commit (HEAD unchanged).
+ *
+ * Why structural identity instead of count: a cycle that both adds finding
+ * `A` and removes finding `B` has net-zero count change but has still
+ * surfaced new ambiguity (`A`). The numeric comparison would let that pass
+ * through and mark the work item complete despite the new finding.
  */
 
 export type ContractOutcome =
   | { kind: 'committed' }
-  | { kind: 'review-grew'; newCount: number }
+  | { kind: 'review-grew'; addedKeys: string[] }
   | { kind: 'no-commit' }
   | { kind: 'amend-only' };
 
 export interface VerifyInput {
-  /** Number of findings in specd_review.yaml before the cycle ran. */
-  reviewBefore: number;
-  /** Number of findings in specd_review.yaml after the cycle ran. */
-  reviewAfter: number;
+  /**
+   * Set of finding keys present before the cycle ran. Each key is the
+   * `findingKey()` of a finding from specd_review.yaml; callers build this
+   * by mapping the loaded findings array.
+   */
+  findingsBefore: ReadonlySet<string>;
+  /** Set of finding keys present after the cycle ran. */
+  findingsAfter: ReadonlySet<string>;
   /** HEAD commit sha before the cycle ran. */
   headBefore: string;
   /** HEAD commit sha after the cycle ran, or null if git is unavailable. */
@@ -33,13 +43,32 @@ export interface VerifyInput {
   newCommitCount: number;
 }
 
+/**
+ * Build the structural-identity key for a review finding. `(spec, finding)`
+ * is treated as the natural key — two findings with the same spec and the
+ * same `finding` text are the same item even if other fields (recommendation,
+ * options, decision) drift between cycles. The `::` separator is unlikely to
+ * appear in either field naturally; if it does, the key still uniquely
+ * identifies the pair (concatenation is injective for fixed-width
+ * separators only when neither field contains the separator, but the
+ * worst-case collision here is just two findings looking identical, which
+ * is the same effect they'd have on the user anyway).
+ */
+export function findingKey(f: { spec: string; finding: string }): string {
+  return `${f.spec}::${f.finding}`;
+}
+
 export function verifyImplementContract(input: VerifyInput): ContractOutcome {
-  const { reviewBefore, reviewAfter, headBefore, headAfter, newCommitCount } = input;
+  const { findingsBefore, findingsAfter, headBefore, headAfter, newCommitCount } = input;
 
   // Review-grew always wins. Even if the agent also committed, surfacing new
   // ambiguity means the item shouldn't be marked complete.
-  if (reviewAfter > reviewBefore) {
-    return { kind: 'review-grew', newCount: reviewAfter - reviewBefore };
+  const addedKeys: string[] = [];
+  for (const key of findingsAfter) {
+    if (!findingsBefore.has(key)) addedKeys.push(key);
+  }
+  if (addedKeys.length > 0) {
+    return { kind: 'review-grew', addedKeys };
   }
 
   // HEAD didn't advance at all — no commit happened.

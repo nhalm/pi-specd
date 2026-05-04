@@ -3,7 +3,7 @@ import type { ExtensionAPI, ExtensionCommandContext } from '@mariozechner/pi-cod
 import { abortOnCtrlC, type CtrlCWatcher } from './abort-on-ctrl-c.js';
 import { getHeadCommit, getNewCommitCount } from './git.js';
 import { logOutput } from './logger.js';
-import { verifyImplementContract } from './loop-verify.js';
+import { findingKey, verifyImplementContract } from './loop-verify.js';
 import { spawnViewerPane, type ViewerHandle } from './viewer-host.js';
 import { type Phase } from './phase.js';
 import { buildImplementPrompt, REVIEW_INTAKE_PROMPT, AUDIT_PROMPT } from './prompts.js';
@@ -304,7 +304,7 @@ async function runLoopBody(
       break;
     }
 
-    const reviewBefore = (await loadReviewList(cwd)).findings.length;
+    const findingsBefore = new Set((await loadReviewList(cwd)).findings.map(findingKey));
     const headBefore = await getHeadCommit(cwd);
     if (!headBefore) {
       clearWidget(ctx);
@@ -357,12 +357,13 @@ async function runLoopBody(
 
     // Post-checks: did the agent surface ambiguity? did it commit?
     const reviewAfter = await loadReviewList(cwd);
+    const findingsAfter = new Set(reviewAfter.findings.map(findingKey));
     const headAfter = await getHeadCommit(cwd);
     const newCommitCount =
       headAfter !== null && headAfter !== headBefore ? await getNewCommitCount(cwd, headBefore) : 0;
     const outcome = verifyImplementContract({
-      reviewBefore,
-      reviewAfter: reviewAfter.findings.length,
+      findingsBefore,
+      findingsAfter,
       headBefore,
       headAfter,
       newCommitCount,
@@ -372,7 +373,7 @@ async function runLoopBody(
       sendProgress(
         pi,
         'info',
-        `Agent surfaced ${outcome.newCount} new review finding(s) for [${item.spec}] ${item.description}. Item not marked complete.`,
+        `Agent surfaced ${outcome.addedKeys.length} new review finding(s) for [${item.spec}] ${item.description}. Item not marked complete.`,
       );
       surfaceReviewItems(pi, cwd, getUndecided(reviewAfter.findings));
       clearWidget(ctx);
