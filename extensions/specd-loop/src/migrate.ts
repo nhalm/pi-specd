@@ -189,9 +189,23 @@ export async function runMigrate(
   // parent so it can announce the result without bloating its context with
   // the full transcript.
   const summary = extractSummary(result.output);
-  // Send the trigger as a non-displayed custom message: the LLM sees it and
-  // takes a turn, but the chat UI doesn't show this synthesized prompt — the
-  // user only sees the parent agent's relayed response.
+  // LOAD-BEARING PI BEHAVIOR — do not break without checking pi.
+  //
+  // pi.sendMessage with `display: false` and `triggerTurn: true` is a synthesized
+  // prompt: pi's `sendCustomMessage` (agent-session.js:942-971) routes it through
+  // `agent.prompt(appMessage)` when the agent is idle, so the LLM takes a turn
+  // and emits a response — but the chat UI suppresses the synthesized message
+  // itself because of `display: false`. The user sees only the parent agent's
+  // reply.
+  //
+  // This depends on pi NOT changing its routing of custom messages. If pi ever
+  // stops triggering turns from `display: false` messages, or if it starts
+  // rendering them in chat regardless, this hand-off pattern breaks. The
+  // `customType: 'specd-migrate-summary'` is for our own bookkeeping; pi
+  // doesn't dispatch on it (extensions register a renderer if they want to
+  // display-customize, but we don't).
+  //
+  // If you change this, update specd-loop's pi peerDependency floor.
   pi.sendMessage(
     {
       customType: 'specd-migrate-summary',
