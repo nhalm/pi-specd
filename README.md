@@ -150,6 +150,13 @@ When you run `/specd:loop` again, the review intake interprets your decisions an
 - The working directory must contain `AGENTS.md`, `PROJECT.md`, and `specs/README.md`. `/specd:setup` creates all three.
 - For the side-pane viewer experience, pi must be running inside a tmux session. Otherwise the rolling-log widget fallback is used (no in-flight steering).
 
+## Troubleshooting
+
+- **"Cannot verify commits: this directory is not a git repository"** — the loop verifies progress via `git rev-list`, so the project must be a git repo. Run `git init` (and make at least one commit) before re-running `/specd:loop`.
+- **Cycle ended without a commit** — the loop halts and surfaces a recovery hint. Check `git status` for leftover staged or unstaged changes; check whether a `pre-commit` / `commit-msg` hook blocked the commit; and read the full transcript at the path printed in the recovery message. Fix the underlying issue, then re-run `/specd:loop` to pick up the same item.
+- **Version-mismatch warning at preflight** — the project's `.pi-specd` file records a different extension version than the installed extension. Re-run `/specd:setup` to refresh the marker (and pick up any new template behavior).
+- **Per-phase log files** — every phase (review intake, each implement cycle, audit) writes its full transcript to `${TMPDIR}/specd-loop/<phase>-<timestamp>.log` (on macOS, `TMPDIR` is something like `/var/folders/.../T`; on Linux it's typically `/tmp`). The loop prints the exact path when it surfaces an error, but they're useful for any post-hoc investigation.
+
 ## License
 
 MIT
