@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/nhalm/pi-specd/compare/v1.0.1...v1.1.0) (2026-05-04)
+
+
+### Features
+
+* in-process sub-agents with live tmux viewer pane ([#21](https://github.com/nhalm/pi-specd/issues/21)) ([ab3f991](https://github.com/nhalm/pi-specd/commit/ab3f9914d2052f6d1782a013f8ceaa4cfcf699c2))
+
 ## [1.0.1](https://github.com/nhalm/pi-specd/compare/v1.0.0...v1.0.1) (2026-04-28)
 
 
