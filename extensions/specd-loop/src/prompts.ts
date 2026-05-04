@@ -2,6 +2,15 @@
 // The loop driver reads YAML state to know when each phase is done.
 // Prompts intentionally do NOT emit completion sentinels.
 
+import {
+  COMMIT_TYPES,
+  DECISIONS,
+  REVIEW_FILE,
+  SPEC_DIR,
+  SPEC_INDEX_FILE,
+  WORK_LIST_FILE,
+  specPath,
+} from './conventions.js';
 import type { WorkItem } from './types.js';
 
 /**
@@ -29,20 +38,20 @@ You are running the **planning** workflow. Your job is to create specs and write
 ## Instructions
 
 - Study AGENTS.md for guidelines
-- Study specs/README.md to understand existing specs
-- Only modify *.md files, specd_work_list.yaml, and specd_review.yaml
+- Study ${SPEC_INDEX_FILE} to understand existing specs
+- Only modify *.md files, ${WORK_LIST_FILE}, and ${REVIEW_FILE}
 - When doing research, use "model: Sonnet" agents in parallel
 
 ## Workflow
 
 1. **Discuss** — Ask clarifying questions about what the user wants. Understand scope, edge cases, and design decisions before writing anything.
-2. **Write the spec** — Create or update the spec in specs/. Specs define WHAT, not HOW.
-3. **Write work items** — End each planning session by writing corresponding work items to specd_work_list.yaml. If no items are needed yet (e.g. you only updated docs), say so explicitly.
-4. **Update specs/README.md** — Add or update the spec entry in the index.
+2. **Write the spec** — Create or update the spec in ${SPEC_DIR}/. Specs define WHAT, not HOW.
+3. **Write work items** — End each planning session by writing corresponding work items to ${WORK_LIST_FILE}. If no items are needed yet (e.g. you only updated docs), say so explicitly.
+4. **Update ${SPEC_INDEX_FILE}** — Add or update the spec entry in the index.
 
-If you encounter open spec questions you can't resolve in the planning conversation, surface them by writing a finding to specd_review.yaml so the user can decide.
+If you encounter open spec questions you can't resolve in the planning conversation, surface them by writing a finding to ${REVIEW_FILE} so the user can decide.
 
-When **updating** an existing spec, always review the work items in specd_work_list.yaml for that spec. Remove items that are no longer relevant, update items that changed, and unblock items whose dependencies were resolved.
+When **updating** an existing spec, always review the work items in ${WORK_LIST_FILE} for that spec. Remove items that are no longer relevant, update items that changed, and unblock items whose dependencies were resolved.
 
 ## Work Item Quality
 
@@ -82,14 +91,14 @@ Study AGENTS.md for guidelines.
 
 ## Your task
 
-You have been assigned exactly one work item. Do not pick a different item, do not pick up additional work, do not look at specd_work_list.yaml.
+You have been assigned exactly one work item. Do not pick a different item, do not pick up additional work, do not look at ${WORK_LIST_FILE}.
 
-- **Spec:** \`specs/${item.spec}.md\`
+- **Spec:** \`${specPath(item.spec)}\`
 - **Item:** ${item.description}
 
 ## Steps
 
-1. Read \`specs/${item.spec}.md\`. The spec is the source of truth, not the existing code.
+1. Read \`${specPath(item.spec)}\`. The spec is the source of truth, not the existing code.
 2. Implement ONLY the work item described above.
 3. Validate: run tests, run lint/format, fix anything you broke.
 4. Commit. The repo's commit-msg hook runs commitlint with \`@commitlint/config-conventional\`, which enforces:
@@ -102,7 +111,7 @@ You have been assigned exactly one work item. Do not pick a different item, do n
    <optional footer>
    \`\`\`
 
-   - \`type\` (required, lowercase) ∈ { build, chore, ci, docs, feat, fix, perf, refactor, revert, style, test }
+   - \`type\` (required, lowercase) ∈ { ${COMMIT_TYPES.join(', ')} }
    - Subject: required, no trailing period, NOT in sentence-case / start-case / pascal-case / upper-case (lowercase / kebab is fine).
    - Header (\`<type>(<scope>): <subject>\`) ≤ 100 chars.
    - Body and footer lines ≤ 100 chars; blank line between header/body and body/footer.
@@ -112,44 +121,46 @@ You have been assigned exactly one work item. Do not pick a different item, do n
 
 ## If you find an ambiguity
 
-If implementing this item exposes a contradiction (spec says X, code expects Y, no obvious right answer), append a finding to \`specd_review.yaml\` describing it and **stop without committing**. The loop driver will surface it to the user.
+If implementing this item exposes a contradiction (spec says X, code expects Y, no obvious right answer), append a finding to \`${REVIEW_FILE}\` describing it and **stop without committing**. The loop driver will surface it to the user.
 
 ## If you notice unrelated follow-up work
 
-Don't add it to the work list yourself. Append a finding to \`specd_review.yaml\` describing what you noticed; the user can decide whether to schedule it.
+Don't add it to the work list yourself. Append a finding to \`${REVIEW_FILE}\` describing what you noticed; the user can decide whether to schedule it.
 
 ## Hard constraints
 
-- Do NOT modify \`specd_work_list.yaml\` — the loop driver owns it.
+- Do NOT modify \`${WORK_LIST_FILE}\` — the loop driver owns it.
 - Do NOT pick a second work item. One item per turn.
 - The loop driver verifies a commit landed before marking your item complete. No commit means no progress.
 `;
 }
 
 export const REVIEW_INTAKE_PROMPT = `---
-description: Process specd_review.yaml entries and move to work list
+description: Process ${REVIEW_FILE} entries and move to work list
 ---
 
 ${TONE}
 
 Study AGENTS.md for guidelines.
 
-Process specd_review.yaml — convert decided findings into work items or spec changes.
+Process ${REVIEW_FILE} — convert decided findings into work items or spec changes.
 
 ## Step 1: Read review items
 
-For each finding in specd_review.yaml:
+For each finding in ${REVIEW_FILE}:
 - If it has a \`decision\` field, act on it (Step 2).
 - If it has no \`decision\`, leave it untouched.
 
 ## Step 2: Interpret the decision
 
+Decisions must be one of: ${DECISIONS.join(', ')} (\`Skip\` is accepted as a synonym for \`Ignore\`).
+
 | Decision           | Action                                                                  |
 | ------------------ | ----------------------------------------------------------------------- |
-| \`Fix the code\`     | Add a work item to specd_work_list.yaml describing the code fix.        |
+| \`Fix the code\`     | Add a work item to ${WORK_LIST_FILE} describing the code fix.        |
 | \`Update the spec\`  | Edit the spec to reflect correct behavior, then add a work item.        |
-| \`Ignore\` / \`Skip\`  | Remove the finding from specd_review.yaml. Take no other action.        |
-| \`Keep as is\`       | Remove the finding from specd_review.yaml. Take no other action.        |
+| \`Ignore\` / \`Skip\`  | Remove the finding from ${REVIEW_FILE}. Take no other action.        |
+| \`Keep as is\`       | Remove the finding from ${REVIEW_FILE}. Take no other action.        |
 | Custom answer      | Follow the user's instruction — but see the next paragraph.             |
 
 **If a custom answer is too vague, contradictory, or could be interpreted multiple ways, do NOT act on it.** Leave the finding in place (do not delete it, do not add work items, do not edit specs) and add a short \`clarification_needed:\` field to the finding describing what's unclear. The user can then refine the decision on the next loop.
@@ -166,7 +177,7 @@ Each work item must be:
 After processing all decided findings:
 - Remove findings whose decision has been fully acted on (or that resolved to "no action").
 - Keep findings without decisions and findings you marked \`clarification_needed:\`.
-- \`specd_work_list.yaml\` and \`specd_review.yaml\` are local-only state (gitignored) — do not stage or commit them.
+- \`${WORK_LIST_FILE}\` and \`${REVIEW_FILE}\` are local-only state (gitignored) — do not stage or commit them.
 - If you edited any spec files, commit those edits in a single commit using the Conventional Commits format the repo enforces (commitlint config-conventional, e.g. \`chore(specd): process review decisions\`). If you did not edit any spec files, do not create a commit.
 `;
 
@@ -182,7 +193,7 @@ Your task is to audit specs against code and write findings.
 
 ## Scope
 
-Read specd_work_list.yaml. Audit each spec listed in its \`specs\` array. The work list driver removes specs whose work is fully complete, so anything still listed has active work and is in scope.
+Read ${WORK_LIST_FILE}. Audit each spec listed in its \`specs\` array. The work list driver removes specs whose work is fully complete, so anything still listed has active work and is in scope.
 
 If the \`specs\` array is empty, there is nothing to audit — stop.
 
@@ -214,12 +225,12 @@ Use a research agent (model: Sonnet) to audit spec against code. **Zero findings
 Validate each finding yourself:
 
 1. Read the actual code.
-2. Cross-check against specd_work_list.yaml to avoid duplicates.
+2. Cross-check against ${WORK_LIST_FILE} to avoid duplicates.
 3. Is the code actually broken? If no, reject the finding.
 4. Categorize:
-   - Code broken → add a work item to specd_work_list.yaml.
+   - Code broken → add a work item to ${WORK_LIST_FILE}.
    - Spec needs new behavior → update the spec, then add a work item.
-   - Ambiguous → add a finding to specd_review.yaml (do NOT decide for the user).
+   - Ambiguous → add a finding to ${REVIEW_FILE} (do NOT decide for the user).
    - Already known / duplicate → skip.
    - Works fine → skip.
 
@@ -229,7 +240,7 @@ Write confirmed findings to the appropriate file.
 
 ## Commit
 
-\`specd_work_list.yaml\` and \`specd_review.yaml\` are local-only state (gitignored) — do not stage or commit them. If you edited any spec files, commit those edits in a single commit using the Conventional Commits format the repo enforces (commitlint config-conventional, e.g. \`chore(specd): record audit findings\`). If you did not edit any spec files, do not create a commit.
+\`${WORK_LIST_FILE}\` and \`${REVIEW_FILE}\` are local-only state (gitignored) — do not stage or commit them. If you edited any spec files, commit those edits in a single commit using the Conventional Commits format the repo enforces (commitlint config-conventional, e.g. \`chore(specd): record audit findings\`). If you did not edit any spec files, do not create a commit.
 
 ## Output
 
