@@ -5,6 +5,7 @@ import type { ExtensionAPI, ExtensionCommandContext } from '@mariozechner/pi-cod
 
 import { abortOnCtrlC } from './abort-on-ctrl-c.js';
 import { type AgentRunResult } from './agent-runner.js';
+import { SPEC_DIR, SPEC_INDEX_FILE, WORK_LIST_FILE } from './conventions.js';
 import { TONE } from './prompts.js';
 import { runOneShot } from './run-one-shot.js';
 import { EXTENSION_VERSION } from './version.js';
@@ -32,7 +33,7 @@ The new format:
 
 For each file that exists, make the following changes:
 
-### specd_work_list.yaml
+### ${WORK_LIST_FILE}
 - Remove version numbers from spec headers (e.g., \`## auth v0.1\` → \`## auth\`)
 - Remove \`status:\` lines under spec headers
 - Convert to proper YAML format:
@@ -47,12 +48,12 @@ For each file that exists, make the following changes:
           blocked: Add user model
   \`\`\`
 
-### specs/README.md
+### ${SPEC_INDEX_FILE}
 - Remove the "Status lifecycle" section and status lifecycle diagram
 - Remove status column from the spec index table
 - Remove "No versioning" note if present
 
-### Individual spec files (specs/*.md)
+### Individual spec files (${SPEC_DIR}/*.md)
 - Remove version row from the header table (e.g., \`| Version | 0.1 |\`)
 - Remove status row from the header table
 - Remove "Last Updated" row if present
@@ -96,9 +97,9 @@ export async function runMigrate(
     [
       'Migration will rewrite files in this repo:',
       '  - AGENTS.md',
-      '  - specs/*.md (strips version, status, changelog)',
-      '  - specs/README.md',
-      '  - specd_work_list.yaml',
+      `  - ${SPEC_DIR}/*.md (strips version, status, changelog)`,
+      `  - ${SPEC_INDEX_FILE}`,
+      `  - ${WORK_LIST_FILE}`,
       '',
       'Recommended: commit or stash any pending changes first so the migration diff is easy to review.',
       '',

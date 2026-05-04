@@ -3,10 +3,11 @@ import { resolve, dirname } from 'node:path';
 
 import yaml from 'js-yaml';
 
+import { WORK_LIST_FILE } from './conventions.js';
 import type { WorkList, Spec, WorkItem } from './types.js';
 import { isRecord, asString } from './yaml-helpers.js';
 
-export const WORK_LIST_FILE = 'specd_work_list.yaml';
+export { WORK_LIST_FILE };
 
 export async function loadWorkList(cwd: string): Promise<WorkList> {
   const filePath = resolve(cwd, WORK_LIST_FILE);
