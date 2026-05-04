@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 import type { ActivityFrame } from './activity-frame.js';
 
-export interface ViewerHandle {
+export interface ViewerHandle extends AsyncDisposable {
   /** Forward an ActivityFrame to the viewer. */
   send: (frame: ActivityFrame) => void;
   /**
@@ -44,6 +44,12 @@ export interface ViewerHandle {
    * lingering.
    */
   close: (opts?: { kill?: boolean }) => Promise<void>;
+  // [Symbol.asyncDispose] is inherited from AsyncDisposable so callers can
+  // write `await using viewer = ...` and get spawn-time-default cleanup at
+  // block exit. Most call sites still call close({ kill: ... }) explicitly
+  // because they need to override `kill` per termination class — see loop.ts
+  // and migrate.ts. await-using is for the cleanup-on-block-exit case where
+  // the spawn-time killOnClose default is the right behavior.
 }
 
 interface ActiveViewer {
@@ -347,6 +353,16 @@ class ViewerRegistry {
       writeLine({ kind: 'control', subtype: 'specd:title', title: opts.title });
     }
 
+    const closeHandle = async (closeOpts?: { kill?: boolean }) => {
+      if (closed) return;
+      closed = true;
+      reverseStream.destroy();
+      this.active.delete(handle);
+      // The handle's killOnClose was the spawn-time default; an explicit
+      // override here wins so the caller can decide per-call.
+      cleanupOne({ ...handle, killOnClose: closeOpts?.kill ?? handle.killOnClose });
+    };
+
     return {
       send: (frame) => {
         writeLine(frame);
@@ -379,14 +395,13 @@ class ViewerRegistry {
         closeHandlers.add(handler);
         return () => closeHandlers.delete(handler);
       },
-      close: async (closeOpts) => {
-        if (closed) return;
-        closed = true;
-        reverseStream.destroy();
-        this.active.delete(handle);
-        // The handle's killOnClose was the spawn-time default; an explicit
-        // override here wins so the caller can decide per-call.
-        cleanupOne({ ...handle, killOnClose: closeOpts?.kill ?? handle.killOnClose });
+      close: closeHandle,
+      // AsyncDisposable: lets callers write `await using viewer = ...` and
+      // get spawn-time-default cleanup at block exit. Callers that need to
+      // override `kill` per termination class still call close({ kill: ... })
+      // explicitly — see loop.ts and migrate.ts.
+      [Symbol.asyncDispose]: async () => {
+        await closeHandle();
       },
     };
   }
